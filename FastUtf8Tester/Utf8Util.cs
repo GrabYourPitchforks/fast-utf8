@@ -166,13 +166,12 @@ namespace ConsoleApp3
                 // Next, try stripping off ASCII bytes one at a time.
 
                 {
-                    uint mask = (BitConverter.IsLittleEndian) ? 0x00000080U : 0x80000000U;
-                    if ((thisDWord & mask) == 0U)
+                    if (Utf8DWordFirstByteIsAscii(thisDWord))
                     {
                         offset += 1;
                         remainingBytes--;
 
-                        mask = (BitConverter.IsLittleEndian) ? 0x00008000U : 0x00800000U;
+                        uint mask = (BitConverter.IsLittleEndian) ? 0x00008000U : 0x00800000U;
                         if ((thisDWord & mask) == 0U)
                         {
                             offset += 1;
@@ -796,8 +795,7 @@ namespace ConsoleApp3
                 // Next, try stripping off ASCII bytes one at a time.
 
                 {
-                    uint mask = (BitConverter.IsLittleEndian) ? 0x00000080U : 0x80000000U;
-                    if ((thisDWord & mask) == 0U)
+                    if (Utf8DWordFirstByteIsAscii(thisDWord))
                     {
                         if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
                         inputBufferCurrentOffset += 1;
@@ -813,8 +811,7 @@ namespace ConsoleApp3
                         outputBufferCurrentOffset += 1;
                         remainingOutputBufferSize -= 1;
 
-                        mask = (BitConverter.IsLittleEndian) ? 0x00008000U : 0x00800000U;
-                        if ((thisDWord & mask) == 0U)
+                        if (Utf8DWordSecondByteIsAscii(thisDWord))
                         {
                             if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
                             inputBufferCurrentOffset += 1;
@@ -830,8 +827,7 @@ namespace ConsoleApp3
                             outputBufferCurrentOffset += 1;
                             remainingOutputBufferSize -= 1;
 
-                            mask = (BitConverter.IsLittleEndian) ? 0x00800000U : 0x00008000U;
-                            if ((thisDWord & mask) == 0U)
+                            if (Utf8DWordThirdByteIsAscii(thisDWord))
                             {
                                 if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
                                 inputBufferCurrentOffset += 1;
@@ -870,14 +866,147 @@ namespace ConsoleApp3
                 // Check the 2-byte case.
 
                 {
-                    uint mask = (BitConverter.IsLittleEndian) ? 0x0000C0E0U : 0xE0C00000U;
-                    uint comparand = (BitConverter.IsLittleEndian) ? 0x000080C0U : 0xC0800000U;
-                    if ((thisDWord & mask) == comparand)
+                    if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
                     {
                         // Per Table 3-7, valid sequences are:
                         // [ C2..DF ] [ 80..BF ]
 
+                        ProcessTwoByteDWordTryConsumeMany:
+
+                        // Optimization: If this is a two-byte-per-character language like Cyrillic or Hebrew,
+                        // there's a good chance that if we see one two-byte run then there are more two-byte
+                        // runs that follow it. Let's check that now.
+
+                        if (Utf8DWordEndsWithTwoByteMask(thisDWord))
+                        {
+                            // At this point, we know we have two runs of two bytes each.
+                            // Can we extend this to four runs of two bytes each?
+
+                            if (inputBufferRemainingBytes >= sizeof(uint))
+                            {
+                                uint nextDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 4));
+                                if (Utf8DWordBeginsAndEndsWithTwoByteMask(nextDWord))
+                                {
+                                    // We have four runs of two bytes each. Shift the two DWORDs
+                                    // together to make a run of 4 wide characters.
+
+                                    ulong thisQWord = thisDWord;
+                                    if (BitConverter.IsLittleEndian)
+                                    {
+                                        thisQWord |= ((ulong)nextDWord) << 32;
+                                    }
+                                    else
+                                    {
+                                        thisQWord = ((thisQWord) << 32) | (ulong)nextDWord;
+                                    }
+
+                                    // At this point, thisQWord = [ 110aaaaa10bbbbbb 110ccccc10dddddd ... ]
+                                    // We want to remove the "110" and "10" headers from each byte.
+
+                                    if (BitConverter.IsLittleEndian)
+                                    {
+                                        // At this point, thisDWord = [ 10dddddd110ccccc 10bbbbbb110aaaaa ]
+                                        // We want thisDWord = [ 00000cccccdddddd 00000aaaaabbbbbb ]
+
+                                        // TODO: BMI2 SUPPORT
+                                        thisQWord = ((thisQWord & 0x001F001F001F001FUL) << 6) | ((thisQWord & 0x3F003F003F003F00UL) >> 8);
+                                    }
+                                    else
+                                    {
+                                        throw new NotImplementedException();
+                                    }
+
+                                    // Now that we have a run of 4 wide characters, make sure each character has a scalar value of >= U+0080.
+                                    // Note: non-short-circuiting AND below (optimize for valid data, not worried about performance for invalid data)
+
+                                    bool firstCharIsValid = (thisQWord >= 0x0080000000000000UL);
+                                    bool secondCharIsValid = ((thisQWord & 0x0000FF8000000000UL) != 0UL);
+                                    bool thirdCharIsValid = ((thisQWord & 0x00000000FF800000UL) != 0UL);
+                                    bool fourthCharIsValid = ((thisQWord & 0x000000000000FF80UL) != 0UL);
+                                    bool allCharsAreValid = firstCharIsValid & secondCharIsValid & thirdCharIsValid & fourthCharIsValid;
+
+                                    if (allCharsAreValid)
+                                    {
+                                        inputBufferCurrentOffset += 8;
+                                        inputBufferRemainingBytes -= 8;
+                                        Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisQWord);
+                                        outputBufferCurrentOffset += 4;
+                                        remainingOutputBufferSize -= 4;
+
+                                        if (inputBufferRemainingBytes >= sizeof(uint))
+                                        {
+                                            thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+
+                                            // Optimization: If we read a long run of two-byte sequences, the next sequence is probably
+                                            // also two bytes. Check for that first before going back to the beginning of the loop.
+                                            if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
+                                            {
+                                                goto ProcessTwoByteDWordTryConsumeMany;
+                                            }
+                                            else
+                                            {
+                                                goto AfterInitialDWordRead;
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // Invalid sequence incoming! Try consuming only the first two bytes instead of pipelining.
+                                        // We'll eventually report the error.
+                                        goto ProcessTwoByteDWordDoNotTryConsumeMany;
+                                    }
+                                }
+                                else
+                                {
+                                    // We have two runs of two bytes each. Shift the two WORDs
+                                    // together to make a run of 2 wide characters.
+
+                                    if (BitConverter.IsLittleEndian)
+                                    {
+                                        // At this point, thisDWord = [ 10dddddd110ccccc 10bbbbbb110aaaaa ]
+                                        // We want thisDWord = [ 00000cccccdddddd 00000aaaaabbbbbb ]
+
+                                        // TODO: BMI2 SUPPORT
+                                        thisDWord = ((thisDWord & 0x001F001FU) << 6) | ((thisDWord & 0x3F003F00U) >> 8);
+                                    }
+                                    else
+                                    {
+                                        throw new NotImplementedException();
+                                    }
+
+                                    // Now that we have a run of 2 wide characters, make sure each character has a scalar value of >= U+0080.
+                                    // Note: non-short-circuiting AND below (optimize for valid data, not worried about performance for invalid data)
+
+                                    bool firstCharIsValid = (thisDWord >= 0x00800000U);
+                                    bool secondCharIsValid = ((thisDWord & 0x0000FF80U) != 0U);
+                                    bool allCharsAreValid = firstCharIsValid & secondCharIsValid;
+
+                                    if (allCharsAreValid)
+                                    {
+                                        inputBufferCurrentOffset += 4;
+                                        inputBufferRemainingBytes -= 4;
+                                        Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisDWord);
+                                        outputBufferCurrentOffset += 2;
+                                        remainingOutputBufferSize -= 2;
+
+                                        // We've already read the next DWORD, and we know it's not a two-byte sequence,
+                                        // so go to the beginning of the loop.
+
+                                        thisDWord = nextDWord;
+                                        goto AfterInitialDWordRead;
+                                    }
+                                    else
+                                    {
+                                        // Invalid sequence incoming! Try consuming only the first two bytes instead of pipelining.
+                                        // We'll eventually report the error.
+                                        goto ProcessTwoByteDWordDoNotTryConsumeMany;
+                                    }
+                                }
+                            }
+                        }
+
                         ProcessTwoByteSequence:
+                        ProcessTwoByteDWordDoNotTryConsumeMany:
 
                         if (BitConverter.IsLittleEndian)
                         {
@@ -950,7 +1079,7 @@ namespace ConsoleApp3
                             if (inputBufferRemainingBytes >= sizeof(uint))
                             {
                                 thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                                if ((thisDWord & mask) == comparand)
+                                if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
                                 {
                                     goto ProcessTwoByteSequence;
                                 }
@@ -2167,6 +2296,96 @@ namespace ConsoleApp3
                     retVal += 0x08000000U; // retVal = [ 110110ww wwzzzzyy 110111yy yyxxxxxx ]
                     return retVal;
                 }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordBeginsWithTwoByteMask(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                const uint mask = 0x0000C0E0U;
+                const uint comparand = 0x000080C0U;
+                return ((value & mask) == comparand);
+            }
+            else
+            {
+                const uint mask = 0xE0C00000U;
+                const uint comparand = 0xC0800000U;
+                return ((value & mask) == comparand);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordEndsWithTwoByteMask(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                const uint mask = 0xC0E00000U;
+                const uint comparand = 0x80C00000U;
+                return ((value & mask) == comparand);
+            }
+            else
+            {
+                const uint mask = 0x0000E0C0U;
+                const uint comparand = 0x0000C080U;
+                return ((value & mask) == comparand);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordBeginsAndEndsWithTwoByteMask(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                const uint mask = 0xC0E0C0E0U;
+                const uint comparand = 0x80C080C0U;
+                return ((value & mask) == comparand);
+            }
+            else
+            {
+                const uint mask = 0xE0C0E0C0U;
+                const uint comparand = 0xC080C080U;
+                return ((value & mask) == comparand);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordFirstByteIsAscii(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                return ((value & 0x80U) == 0U);
+            }
+            else
+            {
+                return ((int)value >= 0);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordSecondByteIsAscii(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                return ((value & 0x8000U) == 0U);
+            }
+            else
+            {
+                return ((value & 0x800000U) == 0U);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordThirdByteIsAscii(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                return ((value & 0x800000U) == 0U);
+            }
+            else
+            {
+                return ((value & 0x8000U) == 0U);
             }
         }
     }
