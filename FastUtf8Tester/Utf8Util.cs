@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
 
 namespace ConsoleApp3
@@ -29,6 +30,12 @@ namespace ConsoleApp3
                 runeCount = retVal;
                 return true;
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ConvertUtf8ToUtf16(ReadOnlySpan<byte> utf8, Span<char> utf16)
+        {
+            ConvertUtf8ToUtf16Ex(ref utf8.DangerousGetPinnableReference(), utf8.Length, ref utf16.DangerousGetPinnableReference(), utf16.Length, out _);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -708,6 +715,523 @@ namespace ConsoleApp3
             return -1;
         }
 
+        private static int ConvertUtf8ToUtf16Ex(ref byte inputBuffer, int inputLength, ref char outputBuffer, int outputLength, out int numCharsWritten)
+        {
+            IntPtr inputBufferCurrentOffset = IntPtr.Zero;
+            IntPtr inputBufferOffsetAtWhichToAllowUnrolling = IntPtr.Zero;
+            int inputBufferRemainingBytes = inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
+
+            IntPtr outputBufferCurrentOffset = IntPtr.Zero;
+            int remainingOutputBufferSize = outputLength;
+
+            while (inputBufferRemainingBytes >= sizeof(uint))
+            {
+                BeforeInitialDWordRead:
+
+                // Read 32 bits at a time. This is enough to hold any possible UTF8-encoded scalar.
+
+                Debug.Assert(inputLength - (int)inputBufferCurrentOffset >= sizeof(uint));
+                uint thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+
+                AfterInitialDWordRead:
+
+                // First, check for the common case of all-ASCII bytes.
+
+                if (remainingOutputBufferSize >= 4 && (thisDWord & 0x80808080U) == 0U)
+                {
+                    inputBufferCurrentOffset += sizeof(uint);
+                    inputBufferRemainingBytes -= sizeof(uint);
+
+                    ulong thisQWord = thisDWord;
+                    if (Bmi2.IsSupported)
+                    {
+                        thisQWord = Bmi2.ParallelBitDeposit(thisQWord, 0x00FF00FF00FF00FFUL);
+                    }
+                    else
+                    {
+                        thisQWord = ((thisQWord & 0xFF000000UL) << 24)
+                            | ((thisQWord & 0xFF0000UL) << 16)
+                            | ((thisQWord & 0xFF00UL) << 8)
+                            | (thisQWord & 0xFFUL);
+                    }
+
+                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisQWord);
+                    outputBufferCurrentOffset += 4;
+                    remainingOutputBufferSize -= 4;
+
+                    // If we saw a sequence of all ASCII, there's a good chance a significant amount of following data is also ASCII.
+                    // Let's try performing a vectorized widening operation.
+
+                    if (IntPtrIsLessThan(inputBufferCurrentOffset, inputBufferOffsetAtWhichToAllowUnrolling))
+                    {
+                        goto BeforeInitialDWordRead; // we think there's non-ASCII data coming, so don't bother loop unrolling
+                    }
+                    else if (Vector.IsHardwareAccelerated)
+                    {
+                        while (inputBufferRemainingBytes >= Vector<byte>.Count && remainingOutputBufferSize >= Vector<byte>.Count)
+                        {
+                            var inputVector = Unsafe.ReadUnaligned<Vector<byte>>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                            if ((inputVector & new Vector<byte>(0x80)) == Vector<byte>.Zero)
+                            {
+                                Vector.Widen(inputVector,
+                                    dest1: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
+                                    dest2: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + Vector<ushort>.Count)));
+
+                                inputBufferCurrentOffset += Vector<byte>.Count;
+                                inputBufferRemainingBytes -= Vector<byte>.Count;
+                                outputBufferCurrentOffset += Vector<byte>.Count;
+                                remainingOutputBufferSize -= Vector<byte>.Count;
+                            }
+                            else
+                            {
+                                inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + Vector<byte>.Count; // saw non-ASCII data later in the stream
+                                goto BeforeInitialDWordRead;
+                            }
+                        }
+                    }
+
+                    continue;
+                }
+
+                // Next, try stripping off ASCII bytes one at a time.
+
+                {
+                    uint mask = (BitConverter.IsLittleEndian) ? 0x00000080U : 0x80000000U;
+                    if ((thisDWord & mask) == 0U)
+                    {
+                        if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                        inputBufferCurrentOffset += 1;
+                        inputBufferRemainingBytes--;
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord & 0xFFU);
+                        }
+                        else
+                        {
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord >> 24);
+                        }
+                        outputBufferCurrentOffset += 1;
+                        remainingOutputBufferSize -= 1;
+
+                        mask = (BitConverter.IsLittleEndian) ? 0x00008000U : 0x00800000U;
+                        if ((thisDWord & mask) == 0U)
+                        {
+                            if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                            inputBufferCurrentOffset += 1;
+                            inputBufferRemainingBytes--;
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 8) & 0xFFU);
+                            }
+                            else
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 16) & 0xFFU);
+                            }
+                            outputBufferCurrentOffset += 1;
+                            remainingOutputBufferSize -= 1;
+
+                            mask = (BitConverter.IsLittleEndian) ? 0x00800000U : 0x00008000U;
+                            if ((thisDWord & mask) == 0U)
+                            {
+                                if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                                inputBufferCurrentOffset += 1;
+                                inputBufferRemainingBytes--;
+                                if (BitConverter.IsLittleEndian)
+                                {
+                                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 16) & 0xFFU);
+                                }
+                                else
+                                {
+                                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 8) & 0xFFU);
+                                }
+                                outputBufferCurrentOffset += 1;
+                                remainingOutputBufferSize -= 1;
+                            }
+                        }
+
+                        if (inputBufferRemainingBytes < sizeof(uint))
+                        {
+                            break; // read remainder of data
+                        }
+                        else
+                        {
+                            thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                            // fall through to multi-byte consumption logic
+                        }
+                    }
+                }
+
+                // At this point, we know we're working with a multi-byte code unit,
+                // but we haven't yet validated it.
+
+                // The masks and comparands are derived from the Unicode Standard, Table 3-6.
+                // Additionally, we need to check for valid byte sequences per Table 3-7.
+
+                // Check the 2-byte case.
+
+                {
+                    uint mask = (BitConverter.IsLittleEndian) ? 0x0000C0E0U : 0xE0C00000U;
+                    uint comparand = (BitConverter.IsLittleEndian) ? 0x000080C0U : 0xC0800000U;
+                    if ((thisDWord & mask) == comparand)
+                    {
+                        // Per Table 3-7, valid sequences are:
+                        // [ C2..DF ] [ 80..BF ]
+
+                        ProcessTwoByteSequence:
+
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            if (!IsWithinRangeInclusive(thisDWord & 0xFFU, 0xC2U, 0xDFU)) { goto Error; }
+                        }
+                        else
+                        {
+                            if (!IsWithinRangeInclusive(thisDWord, 0xC2000000U, 0xDF000000U)) { goto Error; }
+                        }
+
+                        if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                        inputBufferCurrentOffset += 2;
+                        inputBufferRemainingBytes -= 2;
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x1FU) << 6) | ((thisDWord & 0x3F00U) >> 8));
+                        }
+                        else
+                        {
+                            if (Bmi2.IsSupported)
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x1F3F0000U);
+                            }
+                            else
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x1F000000U) >> 18) | ((thisDWord & 0x3F0000U) >> 16));
+                            }
+                        }
+                        outputBufferCurrentOffset += 1;
+                        remainingOutputBufferSize -= 1;
+
+                        // Optimization: Maybe we're processing a language like Hebrew
+                        // or Russian, so we should expect to see another two-byte
+                        // character immediately after this one.
+
+                        uint innerMask = (BitConverter.IsLittleEndian) ? 0xC0E00000U : 0x0000E0C0U;
+                        uint innerComparand = (BitConverter.IsLittleEndian) ? 0x80C00000U : 0x0000C080U;
+                        if ((thisDWord & innerMask) == innerComparand)
+                        {
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                if (!IsWithinRangeInclusive(thisDWord & 0xFF0000U, 0xC20000U, 0xDF0000U)) { goto Error; }
+                            }
+                            else
+                            {
+                                if (!IsWithinRangeInclusive(thisDWord, 0xC200U, 0xDF00U)) { goto Error; }
+                            }
+
+                            if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                            inputBufferCurrentOffset += 2;
+                            inputBufferRemainingBytes -= 2;
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x1F0000U) >> 10) | ((thisDWord & 0x3F000000U) >> 24));
+                            }
+                            else
+                            {
+                                if (Bmi2.IsSupported)
+                                {
+                                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x1F3FU);
+                                }
+                                else
+                                {
+                                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x1F00U) >> 2) | (thisDWord & 0x3FU));
+                                }
+                            }
+                            outputBufferCurrentOffset += 1;
+                            remainingOutputBufferSize -= 1;
+
+                            if (inputBufferRemainingBytes >= sizeof(uint))
+                            {
+                                thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                                if ((thisDWord & mask) == comparand)
+                                {
+                                    goto ProcessTwoByteSequence;
+                                }
+                                else
+                                {
+                                    goto AfterInitialDWordRead;
+                                }
+                            }
+                            else
+                            {
+                                break; // Running out of data - go down slow path
+                            }
+                        }
+                        else
+                        {
+                            if (inputBufferRemainingBytes >= 2)
+                            {
+                                if (BitConverter.IsLittleEndian)
+                                {
+                                    thisDWord = (thisDWord >> 16) | ((uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2)) << 16);
+                                }
+                                else
+                                {
+                                    thisDWord = (thisDWord << 16) | (uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2));
+                                }
+                                goto AfterInitialDWordRead;
+                            }
+                            else
+                            {
+                                break; // Running out of data - go down slow path
+                            }
+                        }
+
+                        if (inputBufferRemainingBytes >= 2)
+                        {
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                thisDWord = (thisDWord >> 16) | ((uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2)) << 16);
+                            }
+                            else
+                            {
+                                thisDWord = (thisDWord << 16) | (uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2));
+                            }
+                            goto AfterInitialDWordRead;
+                        }
+                        else
+                        {
+                            break; // Running out of bytes; go down slow code path
+                        }
+                    }
+                }
+
+                // Check the 3-byte case.
+
+                {
+                    uint mask = (BitConverter.IsLittleEndian) ? 0x00C0C0F0U : 0xF0C0C000U;
+                    uint comparand = (BitConverter.IsLittleEndian) ? 0x008080E0U : 0xE0808000U;
+                    if ((thisDWord & mask) == comparand)
+                    {
+                        // Per Table 3-7, valid sequences are:
+                        // [   E0   ] [ A0..BF ] [ 80..BF ]
+                        // [ E1..EC ] [ 80..BF ] [ 80..BF ]
+                        // [   ED   ] [ 80..9F ] [ 80..BF ]
+                        // [ EE..EF ] [ 80..BF ] [ 80..BF ]
+
+                        ProcessThreeByteSequence:
+                        Debug.Assert((thisDWord & mask) == comparand);
+
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            if ((thisDWord & 0xFFFFU) >= 0xA000U)
+                            {
+                                if ((thisDWord & 0xFFU) == 0xEDU) { goto Error; }
+                            }
+                            else
+                            {
+                                if ((thisDWord & 0xFFU) == 0xE0U) { goto Error; }
+                            }
+                        }
+                        else
+                        {
+                            if (thisDWord < 0xE0A00000U) { goto Error; }
+                            if (IsWithinRangeInclusive(thisDWord, 0xEDA00000U, 0xEE790000U)) { goto Error; }
+                        }
+
+                        if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                        inputBufferCurrentOffset += 3;
+                        inputBufferRemainingBytes -= 3;
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x0FU) << 12) | ((thisDWord & 0x3F00U) >> 2) | ((thisDWord & 0x3F0000U) >> 16));
+                        }
+                        else
+                        {
+                            if (Bmi2.IsSupported)
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x0F3F3FU);
+                            }
+                            else
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x0F0000U) >> 4) | ((thisDWord & 0x3F00U) >> 2) | (thisDWord & 0x3FU));
+                            }
+                        }
+                        outputBufferCurrentOffset += 1;
+                        remainingOutputBufferSize -= 1;
+
+                        // Optimization: If we read a character that consists of three UTF8 code units, we might be
+                        // reading Cyrillic or CJK text. Let's optimistically assume that the next character also
+                        // consists of three UTF8 code units and short-circuit some of the earlier logic. If this
+                        // guess turns out to be incorrect we'll just jump back near the beginning of the loop.
+
+                        // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
+                        // in to the text. If this happens strip it off now before seeing if the next character
+                        // consists of three code units.
+                        if ((BitConverter.IsLittleEndian && ((thisDWord >> 31) == 0U)) || (!BitConverter.IsLittleEndian && ((thisDWord & 0x80U) == 0U)))
+                        {
+                            if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                            inputBufferCurrentOffset += 1;
+                            inputBufferRemainingBytes--;
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord >> 24);
+                            }
+                            else
+                            {
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord & 0xFFU);
+                            }
+                            outputBufferCurrentOffset += 1;
+                            remainingOutputBufferSize--;
+                        }
+
+                        if (inputBufferRemainingBytes >= sizeof(uint))
+                        {
+                            thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                            if ((thisDWord & mask) == comparand)
+                            {
+                                goto ProcessThreeByteSequence;
+                            }
+                            else
+                            {
+                                goto AfterInitialDWordRead;
+                            }
+                        }
+                        else
+                        {
+                            break; // Running out of bytes; go down slow code path
+                        }
+                    }
+                }
+
+                // Check the 4-byte case.
+
+                {
+                    uint mask = (BitConverter.IsLittleEndian) ? 0xC0C0C0F8U : 0xF8C0C0C0U;
+                    uint comparand = (BitConverter.IsLittleEndian) ? 0x808080F0U : 0xF0808000U;
+                    if ((thisDWord & mask) == comparand)
+                    {
+                        // Per Table 3-7, valid sequences are:
+                        // [   F0   ] [ 90..BF ] [ 80..BF ] [ 80..BF ]
+                        // [ F1..F3 ] [ 80..BF ] [ 80..BF ] [ 80..BF ]
+                        // [   F4   ] [ 80..8F ] [ 80..BF ] [ 80..BF ]
+
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            if ((thisDWord & 0xFFFFU) >= 0x9000U)
+                            {
+                                if ((thisDWord & 0xFFU) == 0xF4U) { goto Error; }
+                            }
+                            else
+                            {
+                                if ((thisDWord & 0xFFU) == 0xF0U) { goto Error; }
+                            }
+                        }
+                        else
+                        {
+                            if (!IsWithinRangeInclusive(thisDWord, 0xF0900000U, 0xF48FFFFFU)) { goto Error; }
+                        }
+
+                        if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
+                        inputBufferCurrentOffset += 4;
+                        inputBufferRemainingBytes -= 4;
+                        Unsafe.WriteUnaligned(
+                            destination: ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
+                            value: GenerateUtf16CodeUnitsFromFourUtf8CodeUnits(thisDWord));
+                        outputBufferCurrentOffset += 2;
+                        remainingOutputBufferSize -= 2;
+                        continue;
+                    }
+                }
+
+                // Error - no match.
+
+                goto Error;
+            }
+
+            Debug.Assert(inputBufferRemainingBytes < 4);
+            while (inputBufferRemainingBytes > 0)
+            {
+                if (remainingOutputBufferSize == 0)
+                {
+                    goto OutputBufferTooSmall;
+                }
+
+                uint firstByte = Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset);
+
+                if (firstByte < 0x80U)
+                {
+                    // 1-byte (ASCII) case
+                    inputBufferCurrentOffset += 1;
+                    inputBufferRemainingBytes--;
+                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)firstByte;
+                    outputBufferCurrentOffset += 1;
+                    remainingOutputBufferSize -= 1;
+                    continue;
+                }
+                else if (inputBufferRemainingBytes >= 2)
+                {
+                    uint secondByte = Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 1);
+                    if (firstByte < 0xE0U)
+                    {
+                        // 2-byte case
+                        if (firstByte >= 0xC2U && IsValidTrailingByte(secondByte))
+                        {
+                            inputBufferCurrentOffset += 2;
+                            inputBufferRemainingBytes -= 2;
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)GenerateUtf16CodeUnitFromUtf8CodeUnits(firstByte, secondByte);
+                            outputBufferCurrentOffset += 1;
+                            remainingOutputBufferSize -= 1;
+                            continue;
+                        }
+                    }
+                    else if (inputBufferRemainingBytes >= 3)
+                    {
+                        uint thirdByte = Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2);
+                        if (firstByte <= 0xF0U)
+                        {
+                            if (firstByte == 0xE0U)
+                            {
+                                if (!IsWithinRangeInclusive(secondByte, 0xA0U, 0xBFU)) { goto Error; }
+                            }
+                            else if (firstByte == 0xEDU)
+                            {
+                                if (!IsWithinRangeInclusive(secondByte, 0x80U, 0x9FU)) { goto Error; }
+                            }
+                            else
+                            {
+                                if (!IsValidTrailingByte(secondByte)) { goto Error; }
+                            }
+
+                            if (IsValidTrailingByte(thirdByte))
+                            {
+                                inputBufferCurrentOffset += 3;
+                                inputBufferRemainingBytes -= 3;
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)GenerateUtf16CodeUnitFromUtf8CodeUnits(firstByte, secondByte, thirdByte);
+                                outputBufferCurrentOffset += 1;
+                                remainingOutputBufferSize -= 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Error - no match.
+
+                goto Error;
+            }
+
+            // If we reached this point, we're out of data, and we saw no bad UTF8 sequence.
+
+            numCharsWritten = IntPtrToInt32NoOverflowCheck(outputBufferCurrentOffset);
+            return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
+
+            // Error handling logic.
+
+            OutputBufferTooSmall:
+            throw new NotImplementedException();
+
+            Error:
+            throw new NotImplementedException();
+        }
+
         private static int GetIndexOfFirstInvalidUtf8CharEx(ref byte buffer, int length, out int runeCount, out int surrogateCount)
         {
             int tempRuneCount = length;
@@ -850,6 +1374,8 @@ namespace ConsoleApp3
                         // Per Table 3-7, valid sequences are:
                         // [ C2..DF ] [ 80..BF ]
 
+                        ProcessTwoByteSequence:
+
                         if (BitConverter.IsLittleEndian)
                         {
                             if (!IsWithinRangeInclusive(thisDWord & 0xFFU, 0xC2U, 0xDFU)) { goto Error; }
@@ -863,21 +1389,62 @@ namespace ConsoleApp3
                         remainingBytes -= 2;
                         tempRuneCount--; // 2 bytes -> 1 rune
 
-                        if (remainingBytes >= 2)
+                        // Optimization: Maybe we're processing a language like Hebrew
+                        // or Russian, so we should expect to see another two-byte
+                        // character immediately after this one.
+
+                        uint innerMask = (BitConverter.IsLittleEndian) ? 0xC0E00000U : 0x0000E0C0U;
+                        uint innerComparand = (BitConverter.IsLittleEndian) ? 0x80C00000U : 0x0000C080U;
+                        if ((thisDWord & innerMask) == innerComparand)
                         {
                             if (BitConverter.IsLittleEndian)
                             {
-                                thisDWord = (thisDWord >> 16) | ((uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref buffer, offset)) << 16);
+                                if (!IsWithinRangeInclusive(thisDWord & 0xFF0000U, 0xC20000U, 0xDF0000U)) { goto Error; }
                             }
                             else
                             {
-                                thisDWord = (thisDWord << 16) | (uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref buffer, offset));
+                                if (!IsWithinRangeInclusive(thisDWord, 0xC200U, 0xDF00U)) { goto Error; }
                             }
-                            goto AfterInitialDWordRead;
+
+                            offset += 2;
+                            remainingBytes -= 2;
+                            tempRuneCount--; // 2 bytes -> 1 rune
+
+                            if (remainingBytes >= sizeof(uint))
+                            {
+                                thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, offset));
+                                if ((thisDWord & mask) == comparand)
+                                {
+                                    goto ProcessTwoByteSequence;
+                                }
+                                else
+                                {
+                                    goto AfterInitialDWordRead;
+                                }
+                            }
+                            else
+                            {
+                                break; // Running out of data - go down slow path
+                            }
                         }
                         else
                         {
-                            break; // Running out of bytes; go down slow code path
+                            if (remainingBytes >= 2)
+                            {
+                                if (BitConverter.IsLittleEndian)
+                                {
+                                    thisDWord = (thisDWord >> 16) | ((uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref buffer, offset + 2)) << 16);
+                                }
+                                else
+                                {
+                                    thisDWord = (thisDWord << 16) | (uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref buffer, offset + 2));
+                                }
+                                goto AfterInitialDWordRead;
+                            }
+                            else
+                            {
+                                break; // Running out of data - go down slow path
+                            }
                         }
                     }
                 }
@@ -1524,5 +2091,83 @@ namespace ConsoleApp3
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsWithinRangeInclusive(uint value, uint lowerBound, uint upperBound) => ((value - lowerBound) <= (value - upperBound));
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint GenerateUtf16CodeUnitFromUtf8CodeUnits(uint firstByte, uint secondByte)
+        {
+            return ((firstByte & 0x1FU) << 6)
+                | (secondByte & 0x3FU);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint GenerateUtf16CodeUnitFromUtf8CodeUnits(uint firstByte, uint secondByte, uint thirdByte)
+        {
+            return ((firstByte & 0x0FU) << 12)
+                   | ((secondByte & 0x3FU) << 6)
+                   | (secondByte & 0x3FU);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint GenerateUtf16CodeUnitsFromUtf8CodeUnits(uint firstByte, uint secondByte, uint thirdByte, uint fourthByte)
+        {
+            // This method needs to generate a surrogate pair.
+            // RETURN VALUE IS BIG ENDIAN
+
+            uint retVal = ((firstByte & 0x3U) << 24)
+                  | ((secondByte & 0x3FU) << 18)
+                  | ((thirdByte & 0x30U) << 12)
+                  | ((thirdByte & 0x0FU) << 6)
+                  | (fourthByte & 0x3FU);
+            retVal -= 0x400000U; // convert uuuuu to wwww per Table 3-5
+            retVal += 0xD800DC00U; // add surrogate markers back in
+            return retVal;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint GenerateUtf16CodeUnitsFromFourUtf8CodeUnits(uint utf8)
+        {
+            // input and output are in machine order
+            if (BitConverter.IsLittleEndian)
+            {
+                // UTF8 [ 10xxxxxx 10yyyyyy 10uuzzzz 11110uuu ] = scalar 000uuuuu zzzzyyyy yyxxxxxx
+                // UTF16 scalar 000uuuuuzzzzyyyyyyxxxxxx = [ 110111yy yyxxxxxx 110110ww wwzzzzyy ]
+                // where wwww = uuuuu - 1
+                uint retVal = (utf8 & 0x0F0000U) << 6; // retVal = [ 000000yy yy000000 00000000 00000000 ]
+                retVal |= (utf8 & 0x3F000000U) >> 8; // retVal = [ 000000yy yyxxxxxx 00000000 00000000 ]
+                retVal |= (utf8 & 0xFFU) << 8; // retVal = [ 000000yy yyxxxxxx 11110uuu 00000000 ]
+                retVal |= (utf8 & 0x3F00U) >> 6; // retVal = [ 000000yy yyxxxxxx 11110uuu uuzzzz00 ]
+                retVal |= (utf8 & 0x030000U) >> 16; // retVal = [ 000000yy yyxxxxxx 11110uuu uuzzzzyy ]
+                retVal -= 0x40U;// retVal = [ 000000yy yyxxxxxx 111100ww wwzzzzyy ]
+                retVal -= 0x2000U; // retVal = [ 000000yy yyxxxxxx 110100ww wwzzzzyy ]
+                retVal += 0x0800U; // retVal = [ 000000yy yyxxxxxx 110110ww wwzzzzyy ]
+                retVal += 0xDC000000U; // retVal = [ 110111yy yyxxxxxx 110110ww wwzzzzyy ]
+                return retVal;
+            }
+            else
+            {
+                // UTF8 [ 11110uuu 10uuzzzz 10yyyyyy 10xxxxxx ] = scalar 000uuuuu zzzzyyyy yyxxxxxx
+                // UTF16 scalar 000uuuuuxxxxxxxxxxxxxxxx = [ 110110wwwwxxxxxx 110111xxxxxxxxx ]
+                // where wwww = uuuuu - 1
+                if (Bmi2.IsSupported)
+                {
+                    uint retVal = Bmi2.ParallelBitDeposit(Bmi2.ParallelBitExtract(utf8, 0x0F3F3F00U), 0x03FF03FFU); // retVal = [ 00000uuuuuzzzzyy 000000yyyyxxxxxx ]
+                    retVal -= 0x4000U; // retVal = [ 000000wwwwzzzzyy 000000yyyyxxxxxx ]
+                    retVal += 0xD800DC00U; // retVal = [ 110110wwwwzzzzyy 110111yyyyxxxxxx ]
+                    return retVal;
+                }
+                else
+                {
+                    uint retVal = utf8 & 0xFF000000U; // retVal = [ 11110uuu 00000000 00000000 00000000 ]
+                    retVal |= (utf8 & 0x3F0000U) << 2; // retVal = [ 11110uuu uuzzzz00 00000000 00000000 ]
+                    retVal |= (utf8 & 0x3000U) << 4; // retVal = [ 11110uuu uuzzzzyy 00000000 00000000 ]
+                    retVal |= (utf8 & 0x0F00U) >> 2; // retVal = [ 11110uuu uuzzzzyy 000000yy yy000000 ]
+                    retVal |= (utf8 & 0x3FU); // retVal = [ 11110uuu uuzzzzyy 000000yy yyxxxxxx ]
+                    retVal -= 0x20000000U; // retVal = [ 11010uuu uuzzzzyy 000000yy yyxxxxxx ]
+                    retVal -= 0x400000U; // retVal = [ 110100ww wwzzzzyy 000000yy yyxxxxxx ]
+                    retVal += 0xDC00U; // retVal = [ 110100ww wwzzzzyy 110111yy yyxxxxxx ]
+                    retVal += 0x08000000U; // retVal = [ 110110ww wwzzzzyy 110111yy yyxxxxxx ]
+                    return retVal;
+                }
+            }
+        }
     }
 }
