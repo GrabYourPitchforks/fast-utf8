@@ -1073,21 +1073,31 @@ namespace ConsoleApp3
                         {
                             // thisDWord = [ B1 A3 A2 A1 ], validated
                             // secondDWord = [ 00 00 B3 B2 ], unvalidated
-                            // want to produce two wide chars value = [ By Bx Ay Ax ]
+                            // want to produce two wide chars value = [ By Bx ] [ Ay Ax ]
 
-                            uint packedChars = ((thisDWord & 0x0F000000U) << 4)
-                                | ((secondDWord & 0x0000003FU) << 22)
-                                | ((secondDWord & 0x00003F00U) << 8)
-                                | ((thisDWord & 0x0000000FU) << 12)
-                                | ((thisDWord & 0x00003F00U) >> 2)
-                                | ((thisDWord & 0x003F0000U) >> 16);
+                            uint firstChar = ((thisDWord & 0x0000000FU) << 12)
+                               | ((thisDWord & 0x00003F00U) >> 2)
+                               | ((thisDWord & 0x003F0000U) >> 16);
 
-                            if (IsWellFormedCharPackFromDualThreeByteSequences(packedChars, secondDWord))
+                            uint secondChar = ((thisDWord & 0x0F000000U) >> 12)
+                                | ((secondDWord & 0x0000003FU) << 6)
+                                | ((secondDWord & 0x00003F00U) >> 8);
+
+                            // Validation
+
+                            if ((firstChar < 0x0800U) || IsSurrogateFast(firstChar)
+                                || (secondChar < 0x0800U) || IsSurrogateFast(secondChar)
+                                || ((secondDWord & 0xC0C0U) != 0x8080U))
+                            {
+                                goto ProcessThreeByteSequenceNoLookahead; // validation failed; error will be handled later
+                            }
+                            else
                             {
                                 if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
                                 inputBufferCurrentOffset += 6;
                                 inputBufferRemainingBytes -= 6;
-                                Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), packedChars);
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)firstChar;
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)secondChar;
                                 outputBufferCurrentOffset += 2;
                                 remainingOutputBufferSize -= 2;
 
@@ -1112,11 +1122,6 @@ namespace ConsoleApp3
                                 {
                                     break; // running out of data - go down slow path
                                 }
-                            }
-                            else
-                            {
-                                // Error occurred; fall down slow path to consume as many valid bytes as possible
-                                goto ProcessThreeByteSequenceNoLookahead;
                             }
                         }
                         else
@@ -2579,5 +2584,8 @@ namespace ConsoleApp3
                 throw new NotSupportedException();
             }
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsSurrogateFast(uint @char) => ((@char & 0xF800U) == 0xD800U);
     }
 }
