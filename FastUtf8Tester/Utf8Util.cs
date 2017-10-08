@@ -1049,7 +1049,7 @@ namespace ConsoleApp3
 
                     // If a second sequence is coming, the original input stream will contain [ A1 A2 A3 B1 | B2 B3 ... ]
 
-#if false
+#if true
 
                     bool isSecondThreeByteSequenceComing;
                     if (BitConverter.IsLittleEndian)
@@ -1082,15 +1082,7 @@ namespace ConsoleApp3
                                 | ((thisDWord & 0x00003F00U) >> 2)
                                 | ((thisDWord & 0x003F0000U) >> 16);
 
-                            // Validation, non-branching since we assume all checks will pass
-
-                            bool isValid = (packedChars >= 0x08000000U) /* char 'B' is >= U+0800 */
-                                && ((packedChars & 0xF8000000U) != 0xD8000000U) /* char 'B' isn't a surrogate */
-                                && ((packedChars & 0x0000F800U) != 0U) /* char 'A' is >= U+0800 */
-                                && ((packedChars & 0x0000F800U) != 0x0000D800U) /* char 'A' isn't a surrogate */
-                                && ((secondDWord & 0x0000C0C0U) == 0x00008080U); /* secondDWord has correct masking */
-
-                            if (isValid)
+                            if (IsWellFormedCharPackFromDualThreeByteSequences(packedChars, secondDWord))
                             {
                                 if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
                                 inputBufferCurrentOffset += 6;
@@ -2568,6 +2560,24 @@ namespace ConsoleApp3
             ulong c = (value & 0x00000000FFFF0000UL) - 0x0000000000800000U; // high bit will be set (underflow) if CCCC < 0x0080
             ulong d = (value & 0x000000000000FFFFUL) - 0x0000000000000080U; // high bit will be set (underflow) if DDDD < 0x0080
             return ((long)(a | b | c | d) >= 0L); // if any high bit is set, underflow occurred
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsWellFormedCharPackFromDualThreeByteSequences(uint packedChars, ulong secondDWord)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                return (packedChars >= 0x08000000U) /* char 'B' is >= U+0800 */
+                    && ((packedChars & 0xF8000000U) != 0xD8000000U) /* char 'B' isn't a surrogate */
+                    && ((packedChars & 0x0000F800U) != 0U) /* char 'A' is >= U+0800 */
+                    && ((packedChars & 0x0000F800U) != 0x0000D800U) /* char 'A' isn't a surrogate */
+                    && ((secondDWord & 0x0000C0C0U) == 0x00008080U); /* secondDWord has correct masking */
+            }
+            else
+            {
+                // TODO: SUPPORT BIG ENDIAN
+                throw new NotSupportedException();
+            }
         }
     }
 }
