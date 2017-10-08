@@ -740,21 +740,7 @@ namespace ConsoleApp3
                 {
                     inputBufferCurrentOffset += sizeof(uint);
                     inputBufferRemainingBytes -= sizeof(uint);
-
-                    ulong thisQWord = thisDWord;
-                    if (Bmi2.IsSupported)
-                    {
-                        thisQWord = Bmi2.ParallelBitDeposit(thisQWord, 0x00FF00FF00FF00FFUL);
-                    }
-                    else
-                    {
-                        thisQWord = ((thisQWord & 0xFF000000UL) << 24)
-                            | ((thisQWord & 0xFF0000UL) << 16)
-                            | ((thisQWord & 0xFF00UL) << 8)
-                            | (thisQWord & 0xFFUL);
-                    }
-
-                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisQWord);
+                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), Widen(thisDWord));
                     outputBufferCurrentOffset += 4;
                     remainingOutputBufferSize -= 4;
 
@@ -772,6 +758,7 @@ namespace ConsoleApp3
                             var inputVector = Unsafe.ReadUnaligned<Vector<byte>>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
                             if ((inputVector & new Vector<byte>(0x80)) == Vector<byte>.Zero)
                             {
+                                // TODO: Is it ok for this to be unaligned without explicit use of 'unaligned' keyword?
                                 Vector.Widen(inputVector,
                                     dest1: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
                                     dest2: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + Vector<ushort>.Count)));
@@ -865,368 +852,516 @@ namespace ConsoleApp3
 
                 // Check the 2-byte case.
 
+                if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
                 {
-                    if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
+                    // Per Table 3-7, valid sequences are:
+                    // [ C2..DF ] [ 80..BF ]
+
+                    ProcessTwoByteDWordTryConsumeMany:
+
+                    // Optimization: If this is a two-byte-per-character language like Cyrillic or Hebrew,
+                    // there's a good chance that if we see one two-byte run then there are more two-byte
+                    // runs that follow it. Let's check that now.
+
+                    if (Utf8DWordEndsWithTwoByteMask(thisDWord))
                     {
-                        // Per Table 3-7, valid sequences are:
-                        // [ C2..DF ] [ 80..BF ]
+                        // At this point, we know we have two runs of two bytes each.
+                        // Can we extend this to four runs of two bytes each?
 
-                        ProcessTwoByteDWordTryConsumeMany:
-
-                        // Optimization: If this is a two-byte-per-character language like Cyrillic or Hebrew,
-                        // there's a good chance that if we see one two-byte run then there are more two-byte
-                        // runs that follow it. Let's check that now.
-
-                        if (Utf8DWordEndsWithTwoByteMask(thisDWord))
+                        if (inputBufferRemainingBytes >= sizeof(uint))
                         {
-                            // At this point, we know we have two runs of two bytes each.
-                            // Can we extend this to four runs of two bytes each?
-
-                            if (inputBufferRemainingBytes >= sizeof(uint))
+                            uint nextDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 4));
+                            if (Utf8DWordBeginsAndEndsWithTwoByteMask(nextDWord))
                             {
-                                uint nextDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 4));
-                                if (Utf8DWordBeginsAndEndsWithTwoByteMask(nextDWord))
+                                // We have four runs of two bytes each. Shift the two DWORDs
+                                // together to make a run of 4 wide characters.
+
+                                ulong thisQWord = thisDWord;
+                                if (BitConverter.IsLittleEndian)
                                 {
-                                    // We have four runs of two bytes each. Shift the two DWORDs
-                                    // together to make a run of 4 wide characters.
+                                    thisQWord |= ((ulong)nextDWord) << 32;
+                                }
+                                else
+                                {
+                                    thisQWord = ((thisQWord) << 32) | (ulong)nextDWord;
+                                }
 
-                                    ulong thisQWord = thisDWord;
-                                    if (BitConverter.IsLittleEndian)
+                                // At this point, thisQWord = [ 110aaaaa10bbbbbb 110ccccc10dddddd ... ]
+                                // We want to remove the "110" and "10" headers from each byte.
+
+                                if (BitConverter.IsLittleEndian)
+                                {
+                                    // At this point, thisDWord = [ 10dddddd110ccccc 10bbbbbb110aaaaa ]
+                                    // We want thisDWord = [ 00000cccccdddddd 00000aaaaabbbbbb ]
+
+                                    // TODO: BMI2 SUPPORT
+                                    thisQWord = ((thisQWord & 0x001F001F001F001FUL) << 6) | ((thisQWord & 0x3F003F003F003F00UL) >> 8);
+                                }
+                                else
+                                {
+                                    // TODO: BIG ENDIAN SUPPORT
+                                    throw new NotImplementedException();
+                                }
+
+                                // Now that we have a run of 4 wide characters, make sure each character has a scalar value of >= U+0080.
+                                // Note: non-short-circuiting AND below (optimize for valid data, not worried about performance for invalid data)
+
+                                bool firstCharIsValid = (thisQWord >= 0x0080000000000000UL);
+                                bool secondCharIsValid = ((thisQWord & 0x0000FF8000000000UL) != 0UL);
+                                bool thirdCharIsValid = ((thisQWord & 0x00000000FF800000UL) != 0UL);
+                                bool fourthCharIsValid = ((thisQWord & 0x000000000000FF80UL) != 0UL);
+                                bool allCharsAreValid = firstCharIsValid & secondCharIsValid & thirdCharIsValid & fourthCharIsValid;
+
+                                if (allCharsAreValid)
+                                {
+                                    if (remainingOutputBufferSize < 4) { goto OutputBufferTooSmall; }
+                                    inputBufferCurrentOffset += 8;
+                                    inputBufferRemainingBytes -= 8;
+                                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisQWord);
+                                    outputBufferCurrentOffset += 4;
+                                    remainingOutputBufferSize -= 4;
+
+                                    if (inputBufferRemainingBytes >= sizeof(uint))
                                     {
-                                        thisQWord |= ((ulong)nextDWord) << 32;
+                                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+
+                                        // Optimization: If we read a long run of two-byte sequences, the next sequence is probably
+                                        // also two bytes. Check for that first before going back to the beginning of the loop.
+                                        if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
+                                        {
+                                            goto ProcessTwoByteDWordTryConsumeMany;
+                                        }
+                                        else
+                                        {
+                                            goto AfterInitialDWordRead;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    // Invalid sequence incoming! Try consuming only the first two bytes instead of pipelining.
+                                    // We'll eventually report the error.
+                                    goto ProcessTwoByteDWordDoNotTryConsumeMany;
+                                }
+                            }
+                            else
+                            {
+                                // We have two runs of two bytes each. Shift the two WORDs
+                                // together to make a run of 2 wide characters.
+
+                                if (BitConverter.IsLittleEndian)
+                                {
+                                    // At this point, thisDWord = [ 10dddddd110ccccc 10bbbbbb110aaaaa ]
+                                    // We want thisDWord = [ 00000cccccdddddd 00000aaaaabbbbbb ]
+
+                                    // TODO: BMI2 SUPPORT
+                                    thisDWord = ((thisDWord & 0x001F001FU) << 6) | ((thisDWord & 0x3F003F00U) >> 8);
+                                }
+                                else
+                                {
+                                    // TODO: BIG ENDIAN SUPPORT
+                                    throw new NotImplementedException();
+                                }
+
+                                // Now that we have a run of 2 wide characters, make sure each character has a scalar value of >= U+0080.
+                                // Note: non-short-circuiting AND below (optimize for valid data, not worried about performance for invalid data)
+
+                                bool firstCharIsValid = (thisDWord >= 0x00800000U);
+                                bool secondCharIsValid = ((thisDWord & 0x0000FF80U) != 0U);
+                                bool allCharsAreValid = firstCharIsValid & secondCharIsValid;
+
+                                if (allCharsAreValid)
+                                {
+                                    if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
+                                    inputBufferCurrentOffset += 4;
+                                    inputBufferRemainingBytes -= 4;
+                                    Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisDWord);
+                                    outputBufferCurrentOffset += 2;
+                                    remainingOutputBufferSize -= 2;
+
+                                    // We've already read the next DWORD, and we know it's not a two-byte sequence,
+                                    // so go to the beginning of the loop.
+
+                                    thisDWord = nextDWord;
+                                    goto AfterInitialDWordRead;
+                                }
+                                else
+                                {
+                                    // Invalid sequence incoming! Try consuming only the first two bytes instead of pipelining.
+                                    // We'll eventually report the error.
+                                    goto ProcessTwoByteDWordDoNotTryConsumeMany;
+                                }
+                            }
+                        }
+                    }
+
+                    ProcessTwoByteDWordDoNotTryConsumeMany:
+
+                    uint thisChar;
+                    if (BitConverter.IsLittleEndian)
+                    {
+                        // At this point, thisDWord = [ 10dddddd110ccccc 10bbbbbb110aaaaa ]
+                        // We want thisDWord = [ ################ 00000aaaaabbbbbb ], where # is ignored
+
+                        thisChar = ((thisDWord & 0x1FU) << 6) | ((thisDWord & 0x3F00U) >> 8);
+                    }
+                    else
+                    {
+                        // TODO: SUPPORT BIG ENDIAN
+                        throw new NotImplementedException();
+                    }
+
+                    // Validation checking, scalar must be >= U+0080.
+                    if (thisChar < 0x80U) { goto Error; }
+
+                    if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                    inputBufferCurrentOffset += 2;
+                    inputBufferRemainingBytes -= 2;
+                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)thisChar;
+                    outputBufferCurrentOffset += 1;
+                    remainingOutputBufferSize -= 1;
+
+                    if (inputBufferRemainingBytes >= 2)
+                    {
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            thisDWord = (thisDWord >> 16) | ((uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2)) << 16);
+                        }
+                        else
+                        {
+                            thisDWord = (thisDWord << 16) | (uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2));
+                        }
+
+                        // We know from checking earlier that the next WORD doesn't represent a two-byte sequence, or it does
+                        // represent a sequence and there's fewer than 4 bytes remaining in the stream. Either way jump back
+                        // to the beginning so that it can be handled properly.
+
+                        goto AfterInitialDWordRead;
+                    }
+                    else
+                    {
+                        break; // Running out of data - go down slow path
+                    }
+                }
+
+                // Check the 3-byte case.
+
+                if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
+                {
+                    // Per Table 3-7, valid sequences are:
+                    // [   E0   ] [ A0..BF ] [ 80..BF ]
+                    // [ E1..EC ] [ 80..BF ] [ 80..BF ]
+                    // [   ED   ] [ 80..9F ] [ 80..BF ]
+                    // [ EE..EF ] [ 80..BF ] [ 80..BF ]
+
+                    ProcessThreeByteSequenceWithLookahead:
+
+                    Debug.Assert(Utf8DWordBeginsWithThreeByteMask(thisDWord));
+
+                    //goto ProcessThreeByteSequenceNoLookahead;
+
+                    // Optimization: A three-byte character could indicate CJK text, which makes it likely
+                    // that the character following this one is also CJK. If the leftover byte indicates
+                    // that there's another three-byte sequence coming, try consuming multiple sequences
+                    // at once.
+
+                    // If a second sequence is coming, the original input stream will contain [ A1 A2 A3 B1 | B2 B3 ... ]
+
+#if false
+
+                    bool isSecondThreeByteSequenceComing;
+                    if (BitConverter.IsLittleEndian)
+                    {
+                        // search input word for [ B1 A3 A2 A1 ]
+                        isSecondThreeByteSequenceComing = ((thisDWord & 0xF0000000U) == 0xE0000000U);
+                    }
+                    else
+                    {
+                        // search input word for [ A1 A2 A3 B1 ]
+                        isSecondThreeByteSequenceComing = ((thisDWord & 0xF0U) == 0xE0U);
+                    }
+
+                    if (isSecondThreeByteSequenceComing && inputBufferRemainingBytes >= sizeof(uint))
+                    {
+                        uint secondDWord = Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(uint)));
+
+                        // Incoming sequence is believed to be [ A1 A2 A3 B1 B2 B3 ]
+
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            // thisDWord = [ B1 A3 A2 A1 ], validated
+                            // secondDWord = [ 00 00 B3 B2 ], unvalidated
+                            // want to produce two wide chars value = [ By Bx Ay Ax ]
+
+                            uint packedChars = ((thisDWord & 0x0F000000U) << 4)
+                                | ((secondDWord & 0x0000003FU) << 22)
+                                | ((secondDWord & 0x00003F00U) << 8)
+                                | ((thisDWord & 0x0000000FU) << 12)
+                                | ((thisDWord & 0x00003F00U) >> 2)
+                                | ((thisDWord & 0x003F0000U) >> 16);
+
+                            // Validation, non-branching since we assume all checks will pass
+
+                            bool isValid = (packedChars >= 0x08000000U) /* char 'B' is >= U+0800 */
+                                && ((packedChars & 0xF8000000U) != 0xD8000000U) /* char 'B' isn't a surrogate */
+                                && ((packedChars & 0x0000F800U) != 0U) /* char 'A' is >= U+0800 */
+                                && ((packedChars & 0x0000F800U) != 0x0000D800U) /* char 'A' isn't a surrogate */
+                                && ((secondDWord & 0x0000C0C0U) == 0x00008080U); /* secondDWord has correct masking */
+
+                            if (isValid)
+                            {
+                                if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
+                                inputBufferCurrentOffset += 6;
+                                inputBufferRemainingBytes -= 6;
+                                Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), packedChars);
+                                outputBufferCurrentOffset += 2;
+                                remainingOutputBufferSize -= 2;
+
+                                // We just read a three-byte character from the buffer,
+                                // so chances are the next character is also a three-byte
+                                // character. Perform this check eagerly to bypass all the
+                                // logic at the beginning of the loop.
+
+                                if (inputBufferRemainingBytes >= sizeof(uint))
+                                {
+                                    thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                                    if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
+                                    {
+                                        goto ProcessThreeByteSequenceWithLookahead;
                                     }
                                     else
                                     {
-                                        thisQWord = ((thisQWord) << 32) | (ulong)nextDWord;
+                                        goto AfterInitialDWordRead;
                                     }
+                                }
+                                else
+                                {
+                                    break; // running out of data - go down slow path
+                                }
+                            }
+                            else
+                            {
+                                // Error occurred; fall down slow path to consume as many valid bytes as possible
+                                goto ProcessThreeByteSequenceNoLookahead;
+                            }
+                        }
+                        else
+                        {
+                            // TODO: SUPPORT BIG ENDIAN
+                            throw new NotImplementedException();
+                        }
+                    }
 
-                                    // At this point, thisQWord = [ 110aaaaa10bbbbbb 110ccccc10dddddd ... ]
-                                    // We want to remove the "110" and "10" headers from each byte.
+#endif
 
-                                    if (BitConverter.IsLittleEndian)
-                                    {
-                                        // At this point, thisDWord = [ 10dddddd110ccccc 10bbbbbb110aaaaa ]
-                                        // We want thisDWord = [ 00000cccccdddddd 00000aaaaabbbbbb ]
+#if false
+                    if (isSecondThreeByteSequenceComing && inputBufferRemainingBytes >= sizeof(uint))
+                    {
+                        uint secondDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(uint)));
 
-                                        // TODO: BMI2 SUPPORT
-                                        thisQWord = ((thisQWord & 0x001F001F001F001FUL) << 6) | ((thisQWord & 0x3F003F003F003F00UL) >> 8);
-                                    }
-                                    else
-                                    {
-                                        throw new NotImplementedException();
-                                    }
+                        // If a third sequence is coming, the original input stream will contain [ A1 A2 A3 B1 | B2 B3 C1 C2 | C3 ... ]
 
-                                    // Now that we have a run of 4 wide characters, make sure each character has a scalar value of >= U+0080.
-                                    // Note: non-short-circuiting AND below (optimize for valid data, not worried about performance for invalid data)
+                        bool isThirdThreeByteSequenceComing;
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            // search input word for [ C2 C1 B3 B2 ]
+                            isThirdThreeByteSequenceComing = ((secondDWord & 0xF00000U) == 0xE00000U);
+                        }
+                        else
+                        {
+                            // search input word for [ B2 B3 C1 C2 ]
+                            isThirdThreeByteSequenceComing = ((secondDWord & 0xF000U) == 0xE000U);
+                        }
 
-                                    bool firstCharIsValid = (thisQWord >= 0x0080000000000000UL);
-                                    bool secondCharIsValid = ((thisQWord & 0x0000FF8000000000UL) != 0UL);
-                                    bool thirdCharIsValid = ((thisQWord & 0x00000000FF800000UL) != 0UL);
-                                    bool fourthCharIsValid = ((thisQWord & 0x000000000000FF80UL) != 0UL);
-                                    bool allCharsAreValid = firstCharIsValid & secondCharIsValid & thirdCharIsValid & fourthCharIsValid;
+                        if (isThirdThreeByteSequenceComing && inputBufferRemainingBytes >= 2 * sizeof(uint))
+                        {
+                            uint thirdDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2 * sizeof(uint)));
+
+                            // If a fourth sequence is coming, the original input stream will contain [ A1 A2 A3 B1 | B2 B3 C1 C2 | C3 D1 D2 D3 ]
+
+                            bool isFourthThreeByteSequenceComing;
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                // search input word for [ D3 D2 D1 C3 ]
+                                isFourthThreeByteSequenceComing = ((thirdDWord & 0xF000U) == 0xE000U);
+                            }
+                            else
+                            {
+                                // search input word for [ C3 D1 D2 D3 ]
+                                isFourthThreeByteSequenceComing = ((thirdDWord & 0xF00000U) == 0xE00000U);
+                            }
+
+                            if (isFourthThreeByteSequenceComing)
+                            {
+                                // Process 3 DWORDs containing 4 three-byte sequences to create 4 wide characters.
+
+                                if (BitConverter.IsLittleEndian)
+                                {
+                                    // firstDWord = [ B1 A3 A2 A1 ], checked
+                                    // secondDWord = [ C2 C1 B3 B2 ], not checked
+                                    // thirdDWord = [ D3 D2 D1 C3 ], not checked
+
+                                    // Assume for now that the second and third DWORDs are ok, we'll check them later
+                                    // as part of a single branch. For now let's fold all the values together.
+                                    // The final QWORD should be [ Dy Dx Cy Cx By Bx Ay Ax ]
+
+                                    ulong firstQWord = thisDWord;
+                                    ulong secondQWord = secondDWord;
+                                    ulong thirdQWord = thirdDWord;
+
+                                    ulong packedCharsQWord = ((thirdQWord & 0x00000F00UL) << 52)
+                                        | ((thirdQWord & 0x003F0000UL) << 38)
+                                        | ((thirdQWord & 0x3F000000UL) << 24)
+                                        | ((secondQWord & 0x000F0000UL) << 28)
+                                        | ((secondQWord & 0x3F000000UL) << 14)
+                                        | ((thirdQWord & 0x0000003FUL) << 32)
+                                        | ((firstQWord & 0x0F000000UL) << 4)
+                                        | ((secondQWord & 0x0000003FUL) << 22)
+                                        | ((secondDWord & 0x00003F00UL) << 8)
+                                        | ((firstQWord & 0x0000000FUL) << 12)
+                                        | ((firstQWord & 0x00003F00UL) >> 2)
+                                        | ((firstQWord & 0x003F0000UL) >> 16);
+
+                                    // Validation step 1: each character must be >= U+0800 and not a surrogate.
+
+                                    bool firstCharIsValid = (packedCharsQWord >= 0x080000000000UL)
+                                        & ((packedCharsQWord & 0xD800000000000000UL) != 0xD800000000000000UL);
+                                    bool secondCharIsValid = ((packedCharsQWord & 0x000007FF00000000UL) != 0UL)
+                                        & ((packedCharsQWord & 0x0000D80000000000UL) != 0x0000D80000000000UL);
+                                    bool thirdCharIsValid = ((packedCharsQWord & 0x0000000007FF0000UL) != 0UL)
+                                        & ((packedCharsQWord & 0x00000000D8000000UL) != 0x00000000D8000000UL);
+                                    bool fourthCharIsValid = ((packedCharsQWord & 0x00000000000007FFUL) != 0UL)
+                                        & ((packedCharsQWord & 0x000000000000D800UL) != 0x000000000000D800UL);
+
+                                    // Validation step 2: The UTF8 markers on the second and third DWORDs must be valid
+
+                                    bool secondDWordMarkerIsValid = ((secondDWord & 0xC0F0C0C0U) == 0x80E08080U);
+                                    bool thirdDWordMarkerIsValid = ((thirdDWord & 0xC0C0F0C0U) == 0x8080E080U);
+
+                                    bool allCharsAreValid = firstCharIsValid & secondCharIsValid & thirdCharIsValid & fourthCharIsValid & secondDWordMarkerIsValid & thirdDWordMarkerIsValid;
 
                                     if (allCharsAreValid)
                                     {
-                                        inputBufferCurrentOffset += 8;
-                                        inputBufferRemainingBytes -= 8;
-                                        Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisQWord);
+                                        if (remainingOutputBufferSize < 4) { goto OutputBufferTooSmall; }
+                                        inputBufferCurrentOffset += 12;
+                                        inputBufferRemainingBytes -= 12;
+                                        Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), packedCharsQWord);
                                         outputBufferCurrentOffset += 4;
                                         remainingOutputBufferSize -= 4;
 
                                         if (inputBufferRemainingBytes >= sizeof(uint))
                                         {
                                             thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-
-                                            // Optimization: If we read a long run of two-byte sequences, the next sequence is probably
-                                            // also two bytes. Check for that first before going back to the beginning of the loop.
-                                            if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
+                                            if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
                                             {
-                                                goto ProcessTwoByteDWordTryConsumeMany;
+                                                goto ProcessThreeByteSequenceWithLookahead;
                                             }
                                             else
                                             {
                                                 goto AfterInitialDWordRead;
                                             }
                                         }
+                                        else
+                                        {
+                                            break; // running out of data - read remaining bytes
+                                        }
                                     }
                                     else
                                     {
-                                        // Invalid sequence incoming! Try consuming only the first two bytes instead of pipelining.
-                                        // We'll eventually report the error.
-                                        goto ProcessTwoByteDWordDoNotTryConsumeMany;
-                                    }
-                                }
-                                else
-                                {
-                                    // We have two runs of two bytes each. Shift the two WORDs
-                                    // together to make a run of 2 wide characters.
-
-                                    if (BitConverter.IsLittleEndian)
-                                    {
-                                        // At this point, thisDWord = [ 10dddddd110ccccc 10bbbbbb110aaaaa ]
-                                        // We want thisDWord = [ 00000cccccdddddd 00000aaaaabbbbbb ]
-
-                                        // TODO: BMI2 SUPPORT
-                                        thisDWord = ((thisDWord & 0x001F001FU) << 6) | ((thisDWord & 0x3F003F00U) >> 8);
-                                    }
-                                    else
-                                    {
+                                        // TODO: ERROR HANDLING
                                         throw new NotImplementedException();
                                     }
-
-                                    // Now that we have a run of 2 wide characters, make sure each character has a scalar value of >= U+0080.
-                                    // Note: non-short-circuiting AND below (optimize for valid data, not worried about performance for invalid data)
-
-                                    bool firstCharIsValid = (thisDWord >= 0x00800000U);
-                                    bool secondCharIsValid = ((thisDWord & 0x0000FF80U) != 0U);
-                                    bool allCharsAreValid = firstCharIsValid & secondCharIsValid;
-
-                                    if (allCharsAreValid)
-                                    {
-                                        inputBufferCurrentOffset += 4;
-                                        inputBufferRemainingBytes -= 4;
-                                        Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisDWord);
-                                        outputBufferCurrentOffset += 2;
-                                        remainingOutputBufferSize -= 2;
-
-                                        // We've already read the next DWORD, and we know it's not a two-byte sequence,
-                                        // so go to the beginning of the loop.
-
-                                        thisDWord = nextDWord;
-                                        goto AfterInitialDWordRead;
-                                    }
-                                    else
-                                    {
-                                        // Invalid sequence incoming! Try consuming only the first two bytes instead of pipelining.
-                                        // We'll eventually report the error.
-                                        goto ProcessTwoByteDWordDoNotTryConsumeMany;
-                                    }
-                                }
-                            }
-                        }
-
-                        ProcessTwoByteSequence:
-                        ProcessTwoByteDWordDoNotTryConsumeMany:
-
-                        if (BitConverter.IsLittleEndian)
-                        {
-                            if (!IsWithinRangeInclusive(thisDWord & 0xFFU, 0xC2U, 0xDFU)) { goto Error; }
-                        }
-                        else
-                        {
-                            if (!IsWithinRangeInclusive(thisDWord, 0xC2000000U, 0xDF000000U)) { goto Error; }
-                        }
-
-                        if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
-                        inputBufferCurrentOffset += 2;
-                        inputBufferRemainingBytes -= 2;
-                        if (BitConverter.IsLittleEndian)
-                        {
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x1FU) << 6) | ((thisDWord & 0x3F00U) >> 8));
-                        }
-                        else
-                        {
-                            if (Bmi2.IsSupported)
-                            {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x1F3F0000U);
-                            }
-                            else
-                            {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x1F000000U) >> 18) | ((thisDWord & 0x3F0000U) >> 16));
-                            }
-                        }
-                        outputBufferCurrentOffset += 1;
-                        remainingOutputBufferSize -= 1;
-
-                        // Optimization: Maybe we're processing a language like Hebrew
-                        // or Russian, so we should expect to see another two-byte
-                        // character immediately after this one.
-
-                        uint innerMask = (BitConverter.IsLittleEndian) ? 0xC0E00000U : 0x0000E0C0U;
-                        uint innerComparand = (BitConverter.IsLittleEndian) ? 0x80C00000U : 0x0000C080U;
-                        if ((thisDWord & innerMask) == innerComparand)
-                        {
-                            if (BitConverter.IsLittleEndian)
-                            {
-                                if (!IsWithinRangeInclusive(thisDWord & 0xFF0000U, 0xC20000U, 0xDF0000U)) { goto Error; }
-                            }
-                            else
-                            {
-                                if (!IsWithinRangeInclusive(thisDWord, 0xC200U, 0xDF00U)) { goto Error; }
-                            }
-
-                            if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
-                            inputBufferCurrentOffset += 2;
-                            inputBufferRemainingBytes -= 2;
-                            if (BitConverter.IsLittleEndian)
-                            {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x1F0000U) >> 10) | ((thisDWord & 0x3F000000U) >> 24));
-                            }
-                            else
-                            {
-                                if (Bmi2.IsSupported)
-                                {
-                                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x1F3FU);
                                 }
                                 else
                                 {
-                                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x1F00U) >> 2) | (thisDWord & 0x3FU));
+                                    // TODO: SUPPORT BIG ENDIAN
+                                    throw new NotImplementedException();
                                 }
                             }
-                            outputBufferCurrentOffset += 1;
-                            remainingOutputBufferSize -= 1;
-
-                            if (inputBufferRemainingBytes >= sizeof(uint))
-                            {
-                                thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                                if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
-                                {
-                                    goto ProcessTwoByteSequence;
-                                }
-                                else
-                                {
-                                    goto AfterInitialDWordRead;
-                                }
-                            }
-                            else
-                            {
-                                break; // Running out of data - go down slow path
-                            }
-                        }
-                        else
-                        {
-                            if (inputBufferRemainingBytes >= 2)
-                            {
-                                if (BitConverter.IsLittleEndian)
-                                {
-                                    thisDWord = (thisDWord >> 16) | ((uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2)) << 16);
-                                }
-                                else
-                                {
-                                    thisDWord = (thisDWord << 16) | (uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2));
-                                }
-                                goto AfterInitialDWordRead;
-                            }
-                            else
-                            {
-                                break; // Running out of data - go down slow path
-                            }
-                        }
-
-                        if (inputBufferRemainingBytes >= 2)
-                        {
-                            if (BitConverter.IsLittleEndian)
-                            {
-                                thisDWord = (thisDWord >> 16) | ((uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2)) << 16);
-                            }
-                            else
-                            {
-                                thisDWord = (thisDWord << 16) | (uint)Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2));
-                            }
-                            goto AfterInitialDWordRead;
-                        }
-                        else
-                        {
-                            break; // Running out of bytes; go down slow code path
                         }
                     }
-                }
+#endif
 
-                // Check the 3-byte case.
+                    ProcessThreeByteSequenceNoLookahead:
 
-                {
-                    uint mask = (BitConverter.IsLittleEndian) ? 0x00C0C0F0U : 0xF0C0C000U;
-                    uint comparand = (BitConverter.IsLittleEndian) ? 0x008080E0U : 0xE0808000U;
-                    if ((thisDWord & mask) == comparand)
+                    if (BitConverter.IsLittleEndian)
                     {
-                        // Per Table 3-7, valid sequences are:
-                        // [   E0   ] [ A0..BF ] [ 80..BF ]
-                        // [ E1..EC ] [ 80..BF ] [ 80..BF ]
-                        // [   ED   ] [ 80..9F ] [ 80..BF ]
-                        // [ EE..EF ] [ 80..BF ] [ 80..BF ]
-
-                        ProcessThreeByteSequence:
-                        Debug.Assert((thisDWord & mask) == comparand);
-
-                        if (BitConverter.IsLittleEndian)
+                        if ((thisDWord & 0xFFFFU) >= 0xA000U)
                         {
-                            if ((thisDWord & 0xFFFFU) >= 0xA000U)
-                            {
-                                if ((thisDWord & 0xFFU) == 0xEDU) { goto Error; }
-                            }
-                            else
-                            {
-                                if ((thisDWord & 0xFFU) == 0xE0U) { goto Error; }
-                            }
+                            if ((thisDWord & 0xFFU) == 0xEDU) { goto Error; }
                         }
                         else
                         {
-                            if (thisDWord < 0xE0A00000U) { goto Error; }
-                            if (IsWithinRangeInclusive(thisDWord, 0xEDA00000U, 0xEE790000U)) { goto Error; }
+                            if ((thisDWord & 0xFFU) == 0xE0U) { goto Error; }
                         }
+                    }
+                    else
+                    {
+                        if (thisDWord < 0xE0A00000U) { goto Error; }
+                        if (IsWithinRangeInclusive(thisDWord, 0xEDA00000U, 0xEE790000U)) { goto Error; }
+                    }
 
+                    if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                    inputBufferCurrentOffset += 3;
+                    inputBufferRemainingBytes -= 3;
+                    if (BitConverter.IsLittleEndian)
+                    {
+                        Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x0FU) << 12) | ((thisDWord & 0x3F00U) >> 2) | ((thisDWord & 0x3F0000U) >> 16));
+                    }
+                    else
+                    {
+                        if (Bmi2.IsSupported)
+                        {
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x0F3F3FU);
+                        }
+                        else
+                        {
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x0F0000U) >> 4) | ((thisDWord & 0x3F00U) >> 2) | (thisDWord & 0x3FU));
+                        }
+                    }
+                    outputBufferCurrentOffset += 1;
+                    remainingOutputBufferSize -= 1;
+
+                    // Optimization: If we read a character that consists of three UTF8 code units, we might be
+                    // reading Cyrillic or CJK text. Let's optimistically assume that the next character also
+                    // consists of three UTF8 code units and short-circuit some of the earlier logic. If this
+                    // guess turns out to be incorrect we'll just jump back near the beginning of the loop.
+
+                    // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
+                    // in to the text. If this happens strip it off now before seeing if the next character
+                    // consists of three code units.
+                    if ((BitConverter.IsLittleEndian && ((thisDWord >> 31) == 0U)) || (!BitConverter.IsLittleEndian && ((thisDWord & 0x80U) == 0U)))
+                    {
                         if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
-                        inputBufferCurrentOffset += 3;
-                        inputBufferRemainingBytes -= 3;
+                        inputBufferCurrentOffset += 1;
+                        inputBufferRemainingBytes--;
                         if (BitConverter.IsLittleEndian)
                         {
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x0FU) << 12) | ((thisDWord & 0x3F00U) >> 2) | ((thisDWord & 0x3F0000U) >> 16));
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord >> 24);
                         }
                         else
                         {
-                            if (Bmi2.IsSupported)
-                            {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x0F3F3FU);
-                            }
-                            else
-                            {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x0F0000U) >> 4) | ((thisDWord & 0x3F00U) >> 2) | (thisDWord & 0x3FU));
-                            }
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord & 0xFFU);
                         }
                         outputBufferCurrentOffset += 1;
-                        remainingOutputBufferSize -= 1;
+                        remainingOutputBufferSize--;
+                    }
 
-                        // Optimization: If we read a character that consists of three UTF8 code units, we might be
-                        // reading Cyrillic or CJK text. Let's optimistically assume that the next character also
-                        // consists of three UTF8 code units and short-circuit some of the earlier logic. If this
-                        // guess turns out to be incorrect we'll just jump back near the beginning of the loop.
-
-                        // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
-                        // in to the text. If this happens strip it off now before seeing if the next character
-                        // consists of three code units.
-                        if ((BitConverter.IsLittleEndian && ((thisDWord >> 31) == 0U)) || (!BitConverter.IsLittleEndian && ((thisDWord & 0x80U) == 0U)))
+                    if (inputBufferRemainingBytes >= sizeof(uint))
+                    {
+                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
                         {
-                            if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
-                            inputBufferCurrentOffset += 1;
-                            inputBufferRemainingBytes--;
-                            if (BitConverter.IsLittleEndian)
-                            {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord >> 24);
-                            }
-                            else
-                            {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord & 0xFFU);
-                            }
-                            outputBufferCurrentOffset += 1;
-                            remainingOutputBufferSize--;
-                        }
-
-                        if (inputBufferRemainingBytes >= sizeof(uint))
-                        {
-                            thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                            if ((thisDWord & mask) == comparand)
-                            {
-                                goto ProcessThreeByteSequence;
-                            }
-                            else
-                            {
-                                goto AfterInitialDWordRead;
-                            }
+                            goto ProcessThreeByteSequenceWithLookahead;
                         }
                         else
                         {
-                            break; // Running out of bytes; go down slow code path
+                            goto AfterInitialDWordRead;
                         }
+                    }
+                    else
+                    {
+                        break; // Running out of bytes; go down slow code path
                     }
                 }
 
@@ -2351,6 +2486,23 @@ namespace ConsoleApp3
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordBeginsWithThreeByteMask(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                const uint mask = 0x00C0C0F0U;
+                const uint comparand = 0x008080E0U;
+                return ((value & mask) == comparand);
+            }
+            else
+            {
+                const uint mask = 0xF0C0C000U;
+                const uint comparand = 0xE0808000U;
+                return ((value & mask) == comparand);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordFirstByteIsAscii(uint value)
         {
             if (BitConverter.IsLittleEndian)
@@ -2386,6 +2538,25 @@ namespace ConsoleApp3
             else
             {
                 return ((value & 0x8000U) == 0U);
+            }
+        }
+
+        // Widens a 32-bit DWORD to a 64-bit QWORD by placing bytes into alternating slots.
+        // [ AA BB CC DD ] -> [ 00 AA 00 BB 00 CC 00 DD ]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ulong Widen(uint value)
+        {
+            if (Bmi2.IsSupported)
+            {
+                return Bmi2.ParallelBitDeposit((ulong)value, 0x00FF00FF00FF00FFUL);
+            }
+            else
+            {
+                ulong qWord = value;
+                return ((qWord & 0xFF000000UL) << 24)
+                    | ((qWord & 0xFF0000UL) << 16)
+                    | ((qWord & 0xFF00UL) << 8)
+                    | (qWord & 0xFFUL);
             }
         }
     }
