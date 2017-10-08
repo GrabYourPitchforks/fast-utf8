@@ -903,16 +903,7 @@ namespace ConsoleApp3
                                     throw new NotImplementedException();
                                 }
 
-                                // Now that we have a run of 4 wide characters, make sure each character has a scalar value of >= U+0080.
-                                // Note: non-short-circuiting AND below (optimize for valid data, not worried about performance for invalid data)
-
-                                bool firstCharIsValid = (thisQWord >= 0x0080000000000000UL);
-                                bool secondCharIsValid = ((thisQWord & 0x0000FF8000000000UL) != 0UL);
-                                bool thirdCharIsValid = ((thisQWord & 0x00000000FF800000UL) != 0UL);
-                                bool fourthCharIsValid = ((thisQWord & 0x000000000000FF80UL) != 0UL);
-                                bool allCharsAreValid = firstCharIsValid & secondCharIsValid & thirdCharIsValid & fourthCharIsValid;
-
-                                if (allCharsAreValid)
+                                if (IsWellFormedCharPackFromQuadTwoByteSequences(thisQWord))
                                 {
                                     if (remainingOutputBufferSize < 4) { goto OutputBufferTooSmall; }
                                     inputBufferCurrentOffset += 8;
@@ -963,14 +954,7 @@ namespace ConsoleApp3
                                     throw new NotImplementedException();
                                 }
 
-                                // Now that we have a run of 2 wide characters, make sure each character has a scalar value of >= U+0080.
-                                // Note: non-short-circuiting AND below (optimize for valid data, not worried about performance for invalid data)
-
-                                bool firstCharIsValid = (thisDWord >= 0x00800000U);
-                                bool secondCharIsValid = ((thisDWord & 0x0000FF80U) != 0U);
-                                bool allCharsAreValid = firstCharIsValid & secondCharIsValid;
-
-                                if (allCharsAreValid)
+                                if (IsWellFormedCharPackFromDoubleTwoByteSequences(thisDWord))
                                 {
                                     if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
                                     inputBufferCurrentOffset += 4;
@@ -2558,6 +2542,34 @@ namespace ConsoleApp3
                     | ((qWord & 0xFF00UL) << 8)
                     | (qWord & 0xFFUL);
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsWellFormedCharPackFromDoubleTwoByteSequences(uint value)
+        {
+            // Given a value [ AAAA BBBB ], ensures that both AAAA and BBBB are
+            // at least U+0080. It's assumed that both AAAA and BBBB are < U+0800
+            // since such a scalar can't be formed from a two-byte UTF8 sequence.
+
+            // This method uses only arithmetic operations and bit manipulation
+            // in order to avoid storing + loading flags between calls.
+
+            uint a = value - 0x00800000U; // high bit will be set (underflow) if AAAA < 0x0080
+            uint b = (value & 0xFFFFU) - 0x0080U; // high bit will be set (underflow) if BBBB < 0x0080
+            return ((int)(a | b) >= 0); // if any high bit is set, underflow occurred
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsWellFormedCharPackFromQuadTwoByteSequences(ulong value)
+        {
+            // Like IsWellFormedCharPackFromDoubleTwoByteSequences, but works with
+            // 64-bit values of the form [ AAAA BBBB CCCC DDDD ].
+
+            ulong a = value - 0x0080000000000000UL; // high bit will be set (underflow) if AAAA < 0x0080
+            ulong b = (value & 0x0000FFFF00000000UL) - 0x0000008000000000U; // high bit will be set (underflow) if BBBB < 0x0080
+            ulong c = (value & 0x00000000FFFF0000UL) - 0x0000000000800000U; // high bit will be set (underflow) if CCCC < 0x0080
+            ulong d = (value & 0x000000000000FFFFUL) - 0x0000000000000080U; // high bit will be set (underflow) if DDDD < 0x0080
+            return ((long)(a | b | c | d) >= 0L); // if any high bit is set, underflow occurred
         }
     }
 }
