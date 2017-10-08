@@ -781,66 +781,64 @@ namespace ConsoleApp3
 
                 // Next, try stripping off ASCII bytes one at a time.
 
+                if (Utf8DWordFirstByteIsAscii(thisDWord))
                 {
-                    if (Utf8DWordFirstByteIsAscii(thisDWord))
+                    if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                    inputBufferCurrentOffset += 1;
+                    inputBufferRemainingBytes--;
+                    if (BitConverter.IsLittleEndian)
+                    {
+                        Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord & 0xFFU);
+                    }
+                    else
+                    {
+                        Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord >> 24);
+                    }
+                    outputBufferCurrentOffset += 1;
+                    remainingOutputBufferSize -= 1;
+
+                    if (Utf8DWordSecondByteIsAscii(thisDWord))
                     {
                         if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
                         inputBufferCurrentOffset += 1;
                         inputBufferRemainingBytes--;
                         if (BitConverter.IsLittleEndian)
                         {
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord & 0xFFU);
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 8) & 0xFFU);
                         }
                         else
                         {
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord >> 24);
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 16) & 0xFFU);
                         }
                         outputBufferCurrentOffset += 1;
                         remainingOutputBufferSize -= 1;
 
-                        if (Utf8DWordSecondByteIsAscii(thisDWord))
+                        if (Utf8DWordThirdByteIsAscii(thisDWord))
                         {
                             if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
                             inputBufferCurrentOffset += 1;
                             inputBufferRemainingBytes--;
                             if (BitConverter.IsLittleEndian)
                             {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 8) & 0xFFU);
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 16) & 0xFFU);
                             }
                             else
                             {
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 16) & 0xFFU);
+                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 8) & 0xFFU);
                             }
                             outputBufferCurrentOffset += 1;
                             remainingOutputBufferSize -= 1;
+                        }
+                    }
 
-                            if (Utf8DWordThirdByteIsAscii(thisDWord))
-                            {
-                                if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
-                                inputBufferCurrentOffset += 1;
-                                inputBufferRemainingBytes--;
-                                if (BitConverter.IsLittleEndian)
-                                {
-                                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 16) & 0xFFU);
-                                }
-                                else
-                                {
-                                    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)((thisDWord >> 8) & 0xFFU);
-                                }
-                                outputBufferCurrentOffset += 1;
-                                remainingOutputBufferSize -= 1;
-                            }
-                        }
-
-                        if (inputBufferRemainingBytes < sizeof(uint))
-                        {
-                            break; // read remainder of data
-                        }
-                        else
-                        {
-                            thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                            // fall through to multi-byte consumption logic
-                        }
+                    if (inputBufferRemainingBytes < sizeof(uint))
+                    {
+                        break; // read remainder of data
+                    }
+                    else
+                    {
+                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        // fall through to multi-byte consumption logic
                     }
                 }
 
@@ -857,7 +855,7 @@ namespace ConsoleApp3
                     // Per Table 3-7, valid sequences are:
                     // [ C2..DF ] [ 80..BF ]
 
-                    ProcessTwoByteDWordTryConsumeMany:
+                    ProcessTwoByteSequenceWithLookahead:
 
                     // Optimization: If this is a two-byte-per-character language like Cyrillic or Hebrew,
                     // there's a good chance that if we see one two-byte run then there are more two-byte
@@ -920,7 +918,7 @@ namespace ConsoleApp3
                                         // also two bytes. Check for that first before going back to the beginning of the loop.
                                         if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
                                         {
-                                            goto ProcessTwoByteDWordTryConsumeMany;
+                                            goto ProcessTwoByteSequenceWithLookahead;
                                         }
                                         else
                                         {
@@ -932,7 +930,7 @@ namespace ConsoleApp3
                                 {
                                     // Invalid sequence incoming! Try consuming only the first two bytes instead of pipelining.
                                     // We'll eventually report the error.
-                                    goto ProcessTwoByteDWordDoNotTryConsumeMany;
+                                    goto ProcessTwoByteSequenceWithoutLookahead;
                                 }
                             }
                             else
@@ -973,13 +971,13 @@ namespace ConsoleApp3
                                 {
                                     // Invalid sequence incoming! Try consuming only the first two bytes instead of pipelining.
                                     // We'll eventually report the error.
-                                    goto ProcessTwoByteDWordDoNotTryConsumeMany;
+                                    goto ProcessTwoByteSequenceWithoutLookahead;
                                 }
                             }
                         }
                     }
 
-                    ProcessTwoByteDWordDoNotTryConsumeMany:
+                    ProcessTwoByteSequenceWithoutLookahead:
 
                     uint thisChar;
                     if (BitConverter.IsLittleEndian)
