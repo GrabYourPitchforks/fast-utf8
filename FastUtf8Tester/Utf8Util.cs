@@ -2429,35 +2429,49 @@ namespace ConsoleApp3
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordEndsWithTwoByteMask(uint value)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                const uint mask = 0xC0E00000U;
-                const uint comparand = 0x80C00000U;
-                return ((value & mask) == comparand);
-            }
-            else
-            {
-                const uint mask = 0x0000E0C0U;
-                const uint comparand = 0x0000C080U;
-                return ((value & mask) == comparand);
-            }
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     const uint mask = 0xC0E00000U;
+            //     const uint comparand = 0x80C00000U;
+            //     return ((value & mask) == comparand);
+            // }
+            // else
+            // {
+            //     const uint mask = 0x0000E0C0U;
+            //     const uint comparand = 0x0000C080U;
+            //     return ((value & mask) == comparand);
+            // }
+
+            return (BitConverter.IsLittleEndian && ((value & 0xC0E00000U) == 0x80C00000U))
+                  || (!BitConverter.IsLittleEndian && ((value & 0x0000E0C0U) == 0x0000C080U));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordBeginsAndEndsWithTwoByteMask(uint value)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                const uint mask = 0xC0E0C0E0U;
-                const uint comparand = 0x80C080C0U;
-                return ((value & mask) == comparand);
-            }
-            else
-            {
-                const uint mask = 0xE0C0E0C0U;
-                const uint comparand = 0xC080C080U;
-                return ((value & mask) == comparand);
-            }
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     const uint mask = 0xC0E0C0E0U;
+            //     const uint comparand = 0x80C080C0U;
+            //     return ((value & mask) == comparand);
+            // }
+            // else
+            // {
+            //     const uint mask = 0xE0C0E0C0U;
+            //     const uint comparand = 0xC080C080U;
+            //     return ((value & mask) == comparand);
+            // }
+
+            return (BitConverter.IsLittleEndian && ((value & 0xC0E0C0E0U) == 0x80C080C0U))
+                || (!BitConverter.IsLittleEndian && ((value & 0xE0C0E0C0U) == 0xC080C080U));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2529,27 +2543,41 @@ namespace ConsoleApp3
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordSecondByteIsAscii(uint value)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                return ((value & 0x8000U) == 0U);
-            }
-            else
-            {
-                return ((value & 0x800000U) == 0U);
-            }
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     return ((value & 0x8000U) == 0U);
+            // }
+            // else
+            // {
+            //     return ((value & 0x800000U) == 0U);
+            // }
+
+            return (BitConverter.IsLittleEndian && ((value & 0x8000U) == 0U))
+                || (!BitConverter.IsLittleEndian && ((value & 0x800000U) == 0U));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordThirdByteIsAscii(uint value)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                return ((value & 0x800000U) == 0U);
-            }
-            else
-            {
-                return ((value & 0x8000U) == 0U);
-            }
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     return ((value & 0x800000U) == 0U);
+            // }
+            // else
+            // {
+            //     return ((value & 0x8000U) == 0U);
+            // }
+
+            return (BitConverter.IsLittleEndian && ((value & 0x800000U) == 0U))
+                || (!BitConverter.IsLittleEndian && ((value & 0x8000U) == 0U));
         }
 
         // Widens a 32-bit DWORD to a 64-bit QWORD by placing bytes into alternating slots.
@@ -2602,19 +2630,18 @@ namespace ConsoleApp3
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsWellFormedCharPackFromDualThreeByteSequences(uint packedChars, ulong secondDWord)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                return (packedChars >= 0x08000000U) /* char 'B' is >= U+0800 */
-                    && ((packedChars & 0xF8000000U) != 0xD8000000U) /* char 'B' isn't a surrogate */
-                    && ((packedChars & 0x0000F800U) != 0U) /* char 'A' is >= U+0800 */
-                    && ((packedChars & 0x0000F800U) != 0x0000D800U) /* char 'A' isn't a surrogate */
-                    && ((secondDWord & 0x0000C0C0U) == 0x00008080U); /* secondDWord has correct masking */
-            }
-            else
+            if (!BitConverter.IsLittleEndian)
             {
                 // TODO: SUPPORT BIG ENDIAN
-                throw new NotSupportedException();
+
+                throw new NotImplementedException();
             }
+
+            return (packedChars >= 0x08000000U) /* char 'B' is >= U+0800 */
+                && ((packedChars & 0xF8000000U) != 0xD8000000U) /* char 'B' isn't a surrogate */
+                && ((packedChars & 0x0000F800U) != 0U) /* char 'A' is >= U+0800 */
+                && ((packedChars & 0x0000F800U) != 0x0000D800U) /* char 'A' isn't a surrogate */
+                && ((secondDWord & 0x0000C0C0U) == 0x00008080U); /* secondDWord has correct masking */
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
