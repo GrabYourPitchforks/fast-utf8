@@ -1,14 +1,38 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Text;
 
 namespace FastUtf8Tester
 {
     internal static partial class Utf8Util
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetRuneCount(ReadOnlySpan<byte> utf8)
+        {
+            return (GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out _) < 0)
+                ? runeCount
+                : throw new ArgumentException(
+                    message: "Invalid data.",
+                    paramName: nameof(utf8));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetUtf16CharCount(ReadOnlySpan<byte> utf8)
+        {
+            return (GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out int surrogateCount) < 0)
+                ? runeCount + surrogateCount /* don't need checked addition since UTF16 char count can never exceed input byte count */
+                : throw new ArgumentException(
+                    message: "Invalid data.",
+                    paramName: nameof(utf8));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsValidUtf8Sequence(ReadOnlySpan<byte> buffer)
+        {
+            return GetIndexOfFirstInvalidUtf8CharCore(ref buffer.DangerousGetPinnableReference(), buffer.Length, out _, out _) < 0;
+        }
+
         private static int GetIndexOfFirstInvalidUtf8CharCore(ref byte inputBuffer, int inputLength, out int runeCount, out int surrogateCount)
         {
             // The fields below control where we read from the buffer.
@@ -394,6 +418,92 @@ namespace FastUtf8Tester
             runeCount = tempRuneCount;
             surrogateCount = tempSurrogatecount;
             return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private unsafe static int GetIndexOfFirstNonAsciiByteVectorized(ref byte buffer, int length)
+        {
+            if (Vector.IsHardwareAccelerated && length >= 2 * Vector<byte>.Count)
+            {
+                IntPtr numBytesConsumed = IntPtr.Zero;
+                int numBytesToConsumeBeforeAligned = (Vector<byte>.Count - ((int)Unsafe.AsPointer(ref buffer) % Vector<byte>.Count)) % Vector<byte>.Count;
+
+                if (length - numBytesToConsumeBeforeAligned < 2 * Vector<byte>.Count)
+                {
+                    return 0; // after alignment, not enough data remaining to justify overhead of setting up vectorized search path
+                }
+
+                if (IntPtr.Size >= sizeof(ulong))
+                {
+                    while (numBytesToConsumeBeforeAligned >= sizeof(ulong))
+                    {
+                        if ((Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, numBytesConsumed)) & 0x8080808080808080UL) != 0UL)
+                        {
+                            return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
+                        }
+                        numBytesConsumed += sizeof(ulong);
+                        numBytesToConsumeBeforeAligned -= sizeof(ulong);
+                    }
+
+                    if (numBytesToConsumeBeforeAligned >= sizeof(uint))
+                    {
+                        if ((Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, numBytesConsumed)) & 0x80808080U) != 0U)
+                        {
+                            return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
+                        }
+                        numBytesConsumed += sizeof(uint);
+                        numBytesToConsumeBeforeAligned -= sizeof(uint);
+                    }
+                }
+                else
+                {
+                    while (numBytesToConsumeBeforeAligned >= sizeof(uint))
+                    {
+                        if ((Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, numBytesConsumed)) & 0x80808080U) != 0U)
+                        {
+                            return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
+                        }
+                        numBytesConsumed += sizeof(uint);
+                        numBytesToConsumeBeforeAligned -= sizeof(uint);
+                    }
+                }
+
+                Debug.Assert(numBytesToConsumeBeforeAligned < 4);
+
+                while (numBytesToConsumeBeforeAligned-- != 0)
+                {
+                    if (((uint)Unsafe.Add(ref buffer, numBytesConsumed) & 0x80U) != 0U)
+                    {
+                        return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set here
+                    }
+                    numBytesConsumed += 1;
+                }
+
+                // At this point, we're properly aligned to begin a fast vectorized search!
+
+                IntPtr numBytesRemaining = (IntPtr)(length - IntPtrToInt32NoOverflowCheck(numBytesConsumed));
+                Debug.Assert(length - (int)numBytesConsumed > 2 * Vector<byte>.Count); // this invariant was checked at beginning of method
+
+                var highBitMask = new Vector<byte>(0x80);
+
+                do
+                {
+                    // Read two vector lines at a time.
+                    if (((Unsafe.As<byte, Vector<byte>>(ref Unsafe.Add(ref buffer, numBytesConsumed)) | Unsafe.As<byte, Vector<byte>>(ref Unsafe.Add(ref buffer, numBytesConsumed + Vector<byte>.Count))) & highBitMask) != Vector<byte>.Zero)
+                    {
+                        break; // found a non-ascii character somewhere in this vector
+                    }
+
+                    numBytesConsumed += 2 * Vector<byte>.Count;
+                    numBytesRemaining -= 2 * Vector<byte>.Count;
+                } while (IntPtrToInt32NoOverflowCheck(numBytesRemaining) > 2 * Vector<byte>.Count);
+
+                return IntPtrToInt32NoOverflowCheck(numBytesConsumed);
+            }
+            else
+            {
+                return 0; // can't vectorize the search
+            }
         }
     }
 }
