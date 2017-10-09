@@ -2519,8 +2519,7 @@ namespace ConsoleApp3
                 ulong qWord = value;
                 return ((qWord & 0xFF000000UL) << 24)
                     | ((qWord & 0xFF0000UL) << 16)
-                    | ((qWord & 0xFF00UL) << 8)
-                    | (qWord & 0xFFUL);
+                    | (((value & 0xFF00U) << 8) | (byte)value);
             }
         }
 
