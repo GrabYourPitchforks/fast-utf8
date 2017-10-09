@@ -426,7 +426,7 @@ namespace FastUtf8Tester
             // to check that it's >= C2.
 
             return (BitConverter.IsLittleEndian && ((value & 0x00FF0000U) >= 0x00C20000U))
-                || (!BitConverter.IsLittleEndian && ((ushort)value >= (ushort)0xC200));
+                || (!BitConverter.IsLittleEndian && ((value & 0xFF00U) >= 0xC200U));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -267,13 +267,13 @@ namespace FastUtf8Tester
 
                     if (BitConverter.IsLittleEndian)
                     {
-                        if ((ushort)thisDWord >= (ushort)0xA000)
+                        if ((thisDWord & 0xFFFFU) >= 0xA000U)
                         {
-                            if ((byte)thisDWord == (byte)0xED) { goto Error; }
+                            if ((thisDWord & 0xFFU) == 0xEDU) { goto Error; }
                         }
                         else
                         {
-                            if ((byte)thisDWord == (byte)0xE0) { goto Error; }
+                            if ((thisDWord & 0xFFU) == 0xE0U) { goto Error; }
                         }
                     }
                     else
@@ -324,13 +324,13 @@ namespace FastUtf8Tester
 
                     if (BitConverter.IsLittleEndian)
                     {
-                        if ((ushort)thisDWord >= (ushort)0x9000)
+                        if ((thisDWord & 0xFFFFU) >= 0x9000U)
                         {
-                            if ((byte)thisDWord == (byte)0xF4) { goto Error; }
+                            if ((thisDWord & 0xFFU) == 0xF4U) { goto Error; }
                         }
                         else
                         {
-                            if ((byte)thisDWord == (byte)0xF0) { goto Error; }
+                            if ((thisDWord & 0xFFU) == 0xF0U) { goto Error; }
                         }
                     }
                     else
