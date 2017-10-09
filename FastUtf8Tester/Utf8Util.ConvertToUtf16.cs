@@ -8,7 +8,24 @@ namespace FastUtf8Tester
 {
     internal static partial class Utf8Util
     {
-        private static int ConvertUtf8ToUtf16Ex(ref byte inputBuffer, int inputLength, ref char outputBuffer, int outputLength, out int numCharsWritten)
+        /// <summary>
+        /// Consumes an input span in its entirety, returning the number of characters written to the output.
+        /// Throws if a conversion error occurs.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int ConvertUtf8ToUtf16(ReadOnlySpan<byte> utf8, Span<char> utf16)
+        {
+            return (ConvertUtf8ToUtf16Core(ref utf8.DangerousGetPinnableReference(), utf8.Length, ref utf16.DangerousGetPinnableReference(), utf16.Length, out _, out int numCharsWritten))
+                ? numCharsWritten
+                : throw new ArgumentException(
+                    message: "Invalid data.",
+                    paramName: nameof(utf8));
+        }
+
+        // Returns true if conversion succeeded (even if not all bytes could be consumed due to buffer sizes),
+        // false if an invalid character was encountered. If error then 'numBytesConsumed' will point to the
+        // index of the first invalid byte.
+        private static bool ConvertUtf8ToUtf16Core(ref byte inputBuffer, int inputLength, ref char outputBuffer, int outputLength, out int numBytesConsumed, out int numCharsWritten)
         {
             // The fields below control where we read from / write to the buffer.
 
@@ -173,7 +190,7 @@ namespace FastUtf8Tester
                         // At this point, we know we have two runs of two bytes each.
                         // Can we extend this to four runs of two bytes each?
 
-                        if (inputBufferRemainingBytes >= sizeof(uint))
+                        if (inputBufferRemainingBytes >= 8 && remainingOutputBufferSize >= 4)
                         {
                             uint nextDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 4));
                             if (Utf8DWordBeginsAndEndsWithTwoByteMask(nextDWord))
@@ -211,7 +228,6 @@ namespace FastUtf8Tester
                                 // Only write data to output buffer if passed validation.
                                 if (IsWellFormedCharPackFromQuadTwoByteSequences(thisQWord))
                                 {
-                                    if (remainingOutputBufferSize < 4) { goto OutputBufferTooSmall; }
                                     inputBufferCurrentOffset += 8;
                                     inputBufferRemainingBytes -= 8;
                                     Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisQWord);
@@ -263,7 +279,6 @@ namespace FastUtf8Tester
                                 // Only write data to output buffer if passed validation.
                                 if (IsWellFormedCharPackFromDoubleTwoByteSequences(thisDWord))
                                 {
-                                    if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
                                     inputBufferCurrentOffset += 4;
                                     inputBufferRemainingBytes -= 4;
                                     Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), thisDWord);
@@ -358,7 +373,7 @@ namespace FastUtf8Tester
 
                     // If a second sequence is coming, the original input stream will contain [ A1 A2 A3 B1 | B2 B3 ... ]
 
-                    if (Utf8DWordEndsWithThreeByteSequenceMarker(thisDWord) && inputBufferRemainingBytes >= sizeof(uint))
+                    if (Utf8DWordEndsWithThreeByteSequenceMarker(thisDWord) && inputBufferRemainingBytes >= 6 && remainingOutputBufferSize >= 2)
                     {
                         uint secondDWord = Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(uint)));
 
@@ -396,7 +411,6 @@ namespace FastUtf8Tester
                         }
                         else
                         {
-                            if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
                             inputBufferCurrentOffset += 6;
                             inputBufferRemainingBytes -= 6;
                             Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)firstChar;
@@ -621,16 +635,46 @@ namespace FastUtf8Tester
 
             // If we reached this point, we're out of data, and we saw no bad UTF8 sequence.
 
+            ReturnSuccess:
+            numBytesConsumed = IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
             numCharsWritten = IntPtrToInt32NoOverflowCheck(outputBufferCurrentOffset);
-            return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
+            return true;
 
             // Error handling logic.
 
+            InputBufferTooSmall:
+            goto ReturnSuccess; // input buffer too small = success case, caller will check
+
             OutputBufferTooSmall:
-            throw new NotImplementedException();
+            goto ReturnSuccess; // output buffer too small = success case, caller will check
 
             Error:
-            throw new NotImplementedException();
+
+            // We saw a bad sequence in the stream. However, this might be due to the input
+            // buffer cutting out before we could read a multi-byte character. We'll check
+            // this right now.
+
+            {
+                uint firstByte = Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset);
+                Debug.Assert(firstByte >= 0x80U, "ASCII bytes are never invalid.");
+
+                // These checks are from Table 3-6.
+                // There are still some weird edge cases here that we don't handle. For example, consider an
+                // input stream that ends with [ E0 80 ]. We won't report it as an error, but we also won't
+                // consume it because we'll tell the caller that we're waiting for the final byte of the
+                // sequence. But per Table 3-7 any 3-byte sequence that reads [ E0 80 ##] is *always* invalid.
+                // A properly-implemented caller will still be able to detect the error eventually.
+
+                if (((firstByte & 0xE0U) == 0xC0U) && (inputBufferRemainingBytes < 2)) { goto InputBufferTooSmall; } // 2-byte marker but not enough input data
+                if (((firstByte & 0xF0U) == 0xE0U) && (inputBufferRemainingBytes < 3)) { goto InputBufferTooSmall; } // 3-byte marker
+                if (((firstByte & 0xF8U) == 0xF0U) && (inputBufferRemainingBytes < 4)) { goto InputBufferTooSmall; } // 4-byte marker
+
+                // If we fell through to here, we really did see a bad sequence.
+
+                numBytesConsumed = IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
+                numCharsWritten = IntPtrToInt32NoOverflowCheck(outputBufferCurrentOffset);
+                return false;
+            }
         }
     }
 }

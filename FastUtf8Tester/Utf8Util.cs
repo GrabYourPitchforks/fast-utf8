@@ -30,12 +30,6 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void ConvertUtf8ToUtf16(ReadOnlySpan<byte> utf8, Span<char> utf16)
-        {
-            ConvertUtf8ToUtf16Ex(ref utf8.DangerousGetPinnableReference(), utf8.Length, ref utf16.DangerousGetPinnableReference(), utf16.Length, out _);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool TryGetUtf16CodeUnitCount(ReadOnlySpan<byte> buffer, out int utf16CodeUnitCount)
         {
             var retVal = GetUtf16CodeUnitCount(ref buffer.DangerousGetPinnableReference(), buffer.Length);
