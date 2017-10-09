@@ -214,8 +214,16 @@ namespace FastUtf8Tester
                             }
                             else if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
                             {
-                                // Validated next bytes are a single 2-byte sequence with no valid 2-byte sequence following
-                                goto ConsumeSingleKnownGoodRunOfTwoBytes;
+                                if (IsFirstWordWellFormedTwoByteSequence(thisDWord))
+                                {
+                                    // Validated next bytes are a single 2-byte sequence with no valid 2-byte sequence following
+                                    goto ConsumeSingleKnownGoodRunOfTwoBytes;
+                                }
+                                else
+                                {
+                                    // Mask said it was a 2-byte sequence but validation failed, go to beginning of loop for error handling
+                                    goto AfterReadNextDWord;
+                                }
                             }
                             else
                             {
