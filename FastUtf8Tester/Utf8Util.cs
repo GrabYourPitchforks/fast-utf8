@@ -760,26 +760,30 @@ namespace ConsoleApp3
                     }
                     else if (Vector.IsHardwareAccelerated)
                     {
-                        while (inputBufferRemainingBytes >= Vector<byte>.Count && remainingOutputBufferSize >= Vector<byte>.Count)
+                        if (inputBufferRemainingBytes >= Vector<byte>.Count && remainingOutputBufferSize >= Vector<byte>.Count)
                         {
-                            var inputVector = Unsafe.ReadUnaligned<Vector<byte>>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                            if ((inputVector & new Vector<byte>(0x80)) == Vector<byte>.Zero)
+                            var highBitMaskVector = new Vector<byte>(0x80);
+                            do
                             {
-                                // TODO: Is it ok for this to be unaligned without explicit use of 'unaligned' keyword?
-                                Vector.Widen(inputVector,
-                                    dest1: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
-                                    dest2: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + Vector<ushort>.Count)));
+                                var inputVector = Unsafe.ReadUnaligned<Vector<byte>>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                                if ((inputVector & highBitMaskVector) == Vector<byte>.Zero)
+                                {
+                                    // TODO: Is it ok for this to be unaligned without explicit use of 'unaligned' keyword?
+                                    Vector.Widen(inputVector,
+                                        dest1: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
+                                        dest2: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + Vector<ushort>.Count)));
 
-                                inputBufferCurrentOffset += Vector<byte>.Count;
-                                inputBufferRemainingBytes -= Vector<byte>.Count;
-                                outputBufferCurrentOffset += Vector<byte>.Count;
-                                remainingOutputBufferSize -= Vector<byte>.Count;
-                            }
-                            else
-                            {
-                                inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + Vector<byte>.Count; // saw non-ASCII data later in the stream
-                                goto BeforeReadNextDWord;
-                            }
+                                    inputBufferCurrentOffset += Vector<byte>.Count;
+                                    inputBufferRemainingBytes -= Vector<byte>.Count;
+                                    outputBufferCurrentOffset += Vector<byte>.Count;
+                                    remainingOutputBufferSize -= Vector<byte>.Count;
+                                }
+                                else
+                                {
+                                    inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + Vector<byte>.Count; // saw non-ASCII data later in the stream
+                                    goto BeforeReadNextDWord;
+                                }
+                            } while (inputBufferRemainingBytes >= Vector<byte>.Count && remainingOutputBufferSize >= Vector<byte>.Count);
                         }
                     }
 
@@ -2504,7 +2508,7 @@ namespace ConsoleApp3
         // Widens a 32-bit DWORD to a 64-bit QWORD by placing bytes into alternating slots.
         // [ AA BB CC DD ] -> [ 00 AA 00 BB 00 CC 00 DD ]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ulong Widen(uint value)
+        private unsafe static ulong Widen(uint value)
         {
             if (Bmi2.IsSupported)
             {
