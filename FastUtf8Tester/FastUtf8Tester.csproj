@@ -5,6 +5,14 @@
     <TargetFramework>netcoreapp2.1</TargetFramework>
     <RuntimeFrameworkVersion>2.1.0-preview1-25804-01</RuntimeFrameworkVersion>
     <NETStandardImplicitPackageVersion>2.1.0-preview1-25804-01</NETStandardImplicitPackageVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <HighEntropyVA>true</HighEntropyVA>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Runtime.Intrinsics.X86">
+      <Version>4.5.0-preview1-25809-02</Version>
+    </PackageReference>
+  </ItemGroup>
 
 </Project>
