@@ -482,11 +482,6 @@ namespace FastUtf8Tester
                     outputBufferCurrentOffset += 1;
                     remainingOutputBufferSize -= 1;
 
-                    // Optimization: If we read a character that consists of three UTF8 code units, we might be
-                    // reading Cyrillic or CJK text. Let's optimistically assume that the next character also
-                    // consists of three UTF8 code units and short-circuit some of the earlier logic. If this
-                    // guess turns out to be incorrect we'll just jump back near the beginning of the loop.
-
                     // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
                     // in to the text. If this happens strip it off now before seeing if the next character
                     // consists of three code units.
