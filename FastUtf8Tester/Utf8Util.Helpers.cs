@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
 
@@ -398,6 +399,34 @@ namespace FastUtf8Tester
                 && ((packedChars & 0x0000F800U) != 0U) /* char 'A' is >= U+0800 */
                 && ((packedChars & 0x0000F800U) != 0x0000D800U) /* char 'A' isn't a surrogate */
                 && ((secondDWord & 0x0000C0C0U) == 0x00008080U); /* secondDWord has correct masking */
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFirstWordWellFormedTwoByteSequence(uint value)
+        {
+            // ASSUMPTION: Caller has already checked the '110y yyyy 10xx xxxx' mask of the input.
+            Debug.Assert(Utf8DWordBeginsWithTwoByteMask(value));
+
+            // Per Table 3-7, first byte of two-byte sequence must be within range C2 .. DF.
+            // Since we already validated it's 80 <= ?? <= DF (per mask check earlier), now only need
+            // to check that it's >= C2.
+
+            return (BitConverter.IsLittleEndian && ((byte)value >= (byte)0xC2))
+                || (!BitConverter.IsLittleEndian && (value >= 0xC2000000U));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsSecondWordWellFormedTwoByteSequence(uint value)
+        {
+            // ASSUMPTION: Caller has already checked the '110y yyyy 10xx xxxx' mask of the input.
+            Debug.Assert(Utf8DWordBeginsWithTwoByteMask(value));
+
+            // Per Table 3-7, first byte of two-byte sequence must be within range C2 .. DF.
+            // Since we already validated it's 80 <= ?? <= DF (per mask check earlier), now only need
+            // to check that it's >= C2.
+
+            return (BitConverter.IsLittleEndian && ((value & 0x00FF0000U) >= 0x00C20000U))
+                || (!BitConverter.IsLittleEndian && ((ushort)value >= (ushort)0xC200));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
