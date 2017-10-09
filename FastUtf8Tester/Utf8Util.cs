@@ -1050,24 +1050,13 @@ namespace ConsoleApp3
                     // If a second sequence is coming, the original input stream will contain [ A1 A2 A3 B1 | B2 B3 ... ]
 
 #if true
-
-                    bool isSecondThreeByteSequenceComing;
-                    if (BitConverter.IsLittleEndian)
-                    {
-                        // search input word for [ B1 A3 A2 A1 ]
-                        isSecondThreeByteSequenceComing = ((thisDWord & 0xF0000000U) == 0xE0000000U);
-                    }
-                    else
-                    {
-                        // search input word for [ A1 A2 A3 B1 ]
-                        isSecondThreeByteSequenceComing = ((thisDWord & 0xF0U) == 0xE0U);
-                    }
-
-                    if (isSecondThreeByteSequenceComing && inputBufferRemainingBytes >= sizeof(uint))
+                    if (Utf8DWordEndsWithThreeByteSequenceMarker(thisDWord) && inputBufferRemainingBytes >= sizeof(uint))
                     {
                         uint secondDWord = Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(uint)));
 
                         // Incoming sequence is believed to be [ A1 A2 A3 B1 B2 B3 ]
+
+                        uint firstChar, secondChar;
 
                         if (BitConverter.IsLittleEndian)
                         {
@@ -1075,59 +1064,59 @@ namespace ConsoleApp3
                             // secondDWord = [ 00 00 B3 B2 ], unvalidated
                             // want to produce two wide chars value = [ By Bx ] [ Ay Ax ]
 
-                            uint firstChar = ((thisDWord & 0x0000000FU) << 12)
-                               | ((thisDWord & 0x00003F00U) >> 2)
-                               | ((thisDWord & 0x003F0000U) >> 16);
+                            firstChar = ((thisDWord & 0x0000000FU) << 12)
+                                | ((thisDWord & 0x00003F00U) >> 2)
+                                | ((thisDWord & 0x003F0000U) >> 16);
 
-                            uint secondChar = ((thisDWord & 0x0F000000U) >> 12)
+                            secondChar = ((thisDWord & 0x0F000000U) >> 12)
                                 | ((secondDWord & 0x0000003FU) << 6)
                                 | ((secondDWord & 0x00003F00U) >> 8);
-
-                            // Validation
-
-                            if ((firstChar < 0x0800U) || IsSurrogateFast(firstChar)
-                                || (secondChar < 0x0800U) || IsSurrogateFast(secondChar)
-                                || ((secondDWord & 0xC0C0U) != 0x8080U))
-                            {
-                                goto ProcessThreeByteSequenceNoLookahead; // validation failed; error will be handled later
-                            }
-                            else
-                            {
-                                if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
-                                inputBufferCurrentOffset += 6;
-                                inputBufferRemainingBytes -= 6;
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)firstChar;
-                                Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)secondChar;
-                                outputBufferCurrentOffset += 2;
-                                remainingOutputBufferSize -= 2;
-
-                                // We just read a three-byte character from the buffer,
-                                // so chances are the next character is also a three-byte
-                                // character. Perform this check eagerly to bypass all the
-                                // logic at the beginning of the loop.
-
-                                if (inputBufferRemainingBytes >= sizeof(uint))
-                                {
-                                    thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                                    if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
-                                    {
-                                        goto ProcessThreeByteSequenceWithLookahead;
-                                    }
-                                    else
-                                    {
-                                        goto AfterInitialDWordRead;
-                                    }
-                                }
-                                else
-                                {
-                                    break; // running out of data - go down slow path
-                                }
-                            }
                         }
                         else
                         {
                             // TODO: SUPPORT BIG ENDIAN
                             throw new NotImplementedException();
+                        }
+
+                        // Validation
+
+                        if ((firstChar < 0x0800U) || IsSurrogateFast(firstChar)
+                            || (secondChar < 0x0800U) || IsSurrogateFast(secondChar)
+                            || ((secondDWord & 0xC0C0U) != 0x8080U))
+                        {
+                            goto ProcessThreeByteSequenceNoLookahead; // validation failed; error will be handled later
+                        }
+                        else
+                        {
+                            if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
+                            inputBufferCurrentOffset += 6;
+                            inputBufferRemainingBytes -= 6;
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)firstChar;
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)secondChar;
+                            outputBufferCurrentOffset += 2;
+                            remainingOutputBufferSize -= 2;
+
+                            // We just read a three-byte character from the buffer,
+                            // so chances are the next character is also a three-byte
+                            // character. Perform this check eagerly to bypass all the
+                            // logic at the beginning of the loop.
+
+                            if (inputBufferRemainingBytes >= sizeof(uint))
+                            {
+                                thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                                if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
+                                {
+                                    goto ProcessThreeByteSequenceWithLookahead;
+                                }
+                                else
+                                {
+                                    goto AfterInitialDWordRead;
+                                }
+                            }
+                            else
+                            {
+                                break; // running out of data - go down slow path
+                            }
                         }
                     }
 
@@ -2416,18 +2405,25 @@ namespace ConsoleApp3
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordBeginsWithTwoByteMask(uint value)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                const uint mask = 0x0000C0E0U;
-                const uint comparand = 0x000080C0U;
-                return ((value & mask) == comparand);
-            }
-            else
-            {
-                const uint mask = 0xE0C00000U;
-                const uint comparand = 0xC0800000U;
-                return ((value & mask) == comparand);
-            }
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     const uint mask = 0x0000C0E0U;
+            //     const uint comparand = 0x000080C0U;
+            //     return ((value & mask) == comparand);
+            // }
+            // else
+            // {
+            //     const uint mask = 0xE0C00000U;
+            //     const uint comparand = 0xC0800000U;
+            //     return ((value & mask) == comparand);
+            // }
+
+            return (BitConverter.IsLittleEndian && ((value & 0x0000C0E0U) == 0x000080C0U))
+                || (!BitConverter.IsLittleEndian && ((value & 0xE0C00000U) == 0xC0800000U));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2467,31 +2463,67 @@ namespace ConsoleApp3
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordBeginsWithThreeByteMask(uint value)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                const uint mask = 0x00C0C0F0U;
-                const uint comparand = 0x008080E0U;
-                return ((value & mask) == comparand);
-            }
-            else
-            {
-                const uint mask = 0xF0C0C000U;
-                const uint comparand = 0xE0808000U;
-                return ((value & mask) == comparand);
-            }
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     const uint mask = 0x00C0C0F0U;
+            //     const uint comparand = 0x008080E0U;
+            //     return ((value & mask) == comparand);
+            // }
+            // else
+            // {
+            //     const uint mask = 0xF0C0C000U;
+            //     const uint comparand = 0xE0808000U;
+            //     return ((value & mask) == comparand);
+            // }
+
+            return (BitConverter.IsLittleEndian && ((value & 0x00C0C0F0U) == 0x008080E0U))
+                   || (!BitConverter.IsLittleEndian && ((value & 0xF0C0C000U) == 0xE0808000U));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordEndsWithThreeByteSequenceMarker(uint value)
+        {
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     // search input word for [ B1 A3 A2 A1 ]
+            //     return ((value & 0xF0000000U) == 0xE0000000U);
+            // }
+            // else
+            // {
+            //     // search input word for [ A1 A2 A3 B1 ]
+            //     return ((value & 0xF0U) == 0xE0U);
+            // }
+
+            return (BitConverter.IsLittleEndian && ((value & 0xF0000000U) == 0xE0000000U))
+                   || (!BitConverter.IsLittleEndian && ((value & 0xF0U) == 0xE0U));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordFirstByteIsAscii(uint value)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                return ((value & 0x80U) == 0U);
-            }
-            else
-            {
-                return ((int)value >= 0);
-            }
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     return ((value & 0x80U) == 0U);
+            // }
+            // else
+            // {
+            //     return ((int)value >= 0);
+            // }
+
+            return (BitConverter.IsLittleEndian && ((value & 0x80U) == 0U))
+                || (!BitConverter.IsLittleEndian && ((int)value >= 0));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
