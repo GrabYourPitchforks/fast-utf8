@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
 using System.Text;
 
-namespace ConsoleApp3
+namespace FastUtf8Tester
 {
     static class Utf8Util
     {
