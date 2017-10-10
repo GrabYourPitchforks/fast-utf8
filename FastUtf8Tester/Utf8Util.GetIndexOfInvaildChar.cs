@@ -461,6 +461,9 @@ namespace FastUtf8Tester
             return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
         }
 
+        // This method isn't actually guaranteed to return the real index; it will likely return an index that occurs *before*
+        // the first non-ASCII byte. But that's ok since this method is simply an optimization that should determine how many
+        // bytes can be safely skipped by the byte-to-char counting mechanism.
         [MethodImpl(MethodImplOptions.NoInlining)]
         private unsafe static int GetIndexOfFirstNonAsciiByteVectorized(ref byte buffer, int length)
         {
