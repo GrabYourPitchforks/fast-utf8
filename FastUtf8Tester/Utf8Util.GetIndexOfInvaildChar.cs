@@ -33,6 +33,35 @@ namespace FastUtf8Tester
                     paramName: nameof(utf8));
         }
 
+        public static int GetUtf16CharCountWithFallback(ReadOnlySpan<byte> utf8)
+        {
+            int totalUtf16CharCount = 0;
+            int offset = 0;
+            while (true)
+            {
+                int indexOfFirstInvalidByte = GetIndexOfFirstInvalidUtf8CharCore(
+                    ref Unsafe.Add(ref utf8.DangerousGetPinnableReference(), offset),
+                    inputLength: utf8.Length - offset,
+                    runeCount: out int runeCount,
+                    surrogateCount: out int surrogateCount);
+
+                int thisIterUtf16CharCount = runeCount + surrogateCount; // guaranteed no overflow
+                checked { totalUtf16CharCount += thisIterUtf16CharCount; } // but this might overflow due to error handling
+
+                if (indexOfFirstInvalidByte < 0)
+                {
+                    return totalUtf16CharCount; // end of data
+                }
+                else
+                {
+                    offset += indexOfFirstInvalidByte;
+                    int numInvalidBytesToReplace = GetInvalidByteCount(ref Unsafe.Add(ref utf8.DangerousGetPinnableReference(), offset), utf8.Length - offset);
+                    checked { totalUtf16CharCount++; } // pretend we're writing out U+FFFD
+                    offset += numInvalidBytesToReplace;
+                }
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsValidUtf8Sequence(ReadOnlySpan<byte> buffer)
         {
@@ -427,7 +456,7 @@ namespace FastUtf8Tester
 
             Error:
 
-            runeCount = tempRuneCount;
+            runeCount = tempRuneCount - inputBufferRemainingBytes; // we assumed earlier each byte corresponded to a single rune, perform fixup now to account for unread bytes
             surrogateCount = tempSurrogatecount;
             return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
         }

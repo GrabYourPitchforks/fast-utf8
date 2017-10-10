@@ -7,6 +7,200 @@ namespace FastUtf8Tester
 {
     internal static partial class Utf8Util
     {
+        // Assuming 'buffer' points to the start of an invalid sequence, returns the length (in bytes)
+        // of the invalid sequence.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static int GetInvalidByteCount(ref byte buffer, int bufferLength)
+        {
+            // We don't try to optimize this code path because it should only ever
+            // be hit in exceptional (error) cases. The list of valid sequences is given in Table 3-7.
+
+            uint firstByte = (bufferLength >= 1) ? (uint)buffer : 0;
+            uint secondByte = (bufferLength >= 2) ? (uint)Unsafe.Add(ref buffer, 1) : 0;
+            uint thirdByte = (bufferLength >= 3) ? (uint)Unsafe.Add(ref buffer, 2) : 0;
+            uint fourthByte = (bufferLength >= 4) ? (uint)Unsafe.Add(ref buffer, 3) : 0;
+
+            if (firstByte < 0x80U)
+            {
+                return 0; // ASCII byte (or empty buffer) => not invalid sequence
+            }
+
+            if (firstByte < 0xC2U)
+            {
+                // First byte invalid.
+                // Cannot be 80 .. BF since this denotes a trailing byte.
+                // Additionally cannot be C0 .. C1 since this is an overlong two-byte sequence.
+                return 1;
+            }
+
+            if (firstByte < 0xE0)
+            {
+                // [ C2 .. DF ] is acceptable start of 2-byte sequence
+                if (IsValidTrailingByte(secondByte))
+                {
+                    return 0; // Valid 2-byte sequence
+                }
+                else
+                {
+                    return 1; // Second byte has no trailer marker => premature termination of 3-byte sequence
+                }
+            }
+
+            if (firstByte == 0xE0U)
+            {
+                // [ E0 ] is acceptable start of 3-byte sequence
+                if (IsWithinRangeInclusive(secondByte, 0xA0U, 0xBFU))
+                {
+                    // [ E0 ] [ A0 .. BF ] is acceptable start of 3-byte sequence
+                    if (IsValidTrailingByte(thirdByte))
+                    {
+                        return 0; // Valid 3-byte sequence
+                    }
+                    else
+                    {
+                        return 2; // Third byte has no trailer marker => premature termination of 3-byte sequence
+                    }
+                }
+                else
+                {
+                    return 1; // Second byte has no trailer marker => premature termination of 3-byte sequence
+                }
+            }
+
+            if (firstByte == 0xEDU)
+            {
+                // [ ED ] is acceptable start of 3-byte sequence
+                if (IsWithinRangeInclusive(secondByte, 0x80U, 0x9FU))
+                {
+                    // [ ED ] [ 80 .. 9F ] is acceptable start of 3-byte sequence
+                    if (IsValidTrailingByte(thirdByte))
+                    {
+                        return 0; // Valid 3-byte sequence
+                    }
+                    else
+                    {
+                        return 2; // Third byte has no trailer marker => premature termination of 3-byte sequence
+                    }
+                }
+                else
+                {
+                    return 1; // Second byte has no trailer marker => premature termination of 3-byte sequence
+                }
+            }
+
+            if (firstByte < 0xF0U)
+            {
+                // [ E1 .. EC ] is acceptable start of 3-byte sequence
+                // [ EE .. EF ] is acceptable start of 3-byte sequence
+                if (IsValidTrailingByte(secondByte))
+                {
+                    // [ E1 .. EC ] [ 80 .. BF ] is acceptable start of 3-byte sequence
+                    // [ EE .. EF ] [ 80 .. BF ] is acceptable start of 3-byte sequence
+                    if (IsValidTrailingByte(thirdByte))
+                    {
+                        return 0; // Valid 3-byte sequence
+                    }
+                    else
+                    {
+                        return 2; // Third byte has no trailer marker => premature termination of 3-byte sequence
+                    }
+                }
+                else
+                {
+                    return 1; // Second byte has no trailer marker => premature termination of 3-byte sequence
+                }
+            }
+
+            if (firstByte == 0xF0U)
+            {
+                // [ F0 ] is acceptable start of 4-byte sequence
+                if (IsWithinRangeInclusive(secondByte, 0x90U, 0xBFU))
+                {
+                    // [ F0 ] [ 90 .. BF ] is acceptable start of 4-byte sequence
+                    if (IsValidTrailingByte(thirdByte))
+                    {
+                        // [ F0 ] [ 90 .. BF ] [ 80 .. BF ] is acceptable start of 4-byte sequence
+                        if (IsValidTrailingByte(fourthByte))
+                        {
+                            return 0; // Valid 4-byte sequence
+                        }
+                        else
+                        {
+                            return 3; // Fourth byte has no trailer marker => premature termination of 4-byte sequence
+                        }
+                    }
+                    else
+                    {
+                        return 2; // Third byte has no trailer marker => premature termination of 4-byte sequence
+                    }
+                }
+                else
+                {
+                    return 1; // Second byte has no trailer marker => premature termination of 3-byte sequence
+                }
+            }
+
+            if (firstByte < 0xF4U)
+            {
+                // [ F1 .. F3 ] is acceptable start of 4-byte sequence
+                if (IsValidTrailingByte(secondByte))
+                {
+                    // [ F1 .. F3 ] [ 80 .. BF ] is acceptable start of 4-byte sequence
+                    if (IsValidTrailingByte(thirdByte))
+                    {
+                        // [ F1 .. F3 ] [ 80 .. BF ] [ 80 .. BF ] is acceptable start of 4-byte sequence
+                        if (IsValidTrailingByte(fourthByte))
+                        {
+                            return 0; // Valid 4-byte sequence
+                        }
+                        else
+                        {
+                            return 3; // Fourth byte has no trailer marker => premature termination of 4-byte sequence
+                        }
+                    }
+                    else
+                    {
+                        return 2; // Third byte has no trailer marker => premature termination of 4-byte sequence
+                    }
+                }
+                else
+                {
+                    return 1; // Second byte has no trailer marker => premature termination of 3-byte sequence
+                }
+            }
+
+            if (firstByte == 0xF4U)
+            {
+                // [ F4 ] is acceptable start of 4-byte sequence
+                if (IsWithinRangeInclusive(secondByte, 0x80U, 0x8FU))
+                {
+                    // [ F4 ] [ 80 .. 8F ] is acceptable start of 4-byte sequence
+                    if (IsValidTrailingByte(thirdByte))
+                    {
+                        // [ F4 ] [ 80 .. 8F ] [ 80 .. BF ] is acceptable start of 4-byte sequence
+                        if (IsValidTrailingByte(fourthByte))
+                        {
+                            return 0; // Valid 4-byte sequence
+                        }
+                        else
+                        {
+                            return 3; // Fourth byte has no trailer marker => premature termination of 4-byte sequence
+                        }
+                    }
+                    else
+                    {
+                        return 2; // Third byte has no trailer marker => premature termination of 4-byte sequence
+                    }
+                }
+                else
+                {
+                    return 1; // Second byte has no trailer marker => premature termination of 3-byte sequence
+                }
+            }
+
+            return 1; // first byte didn't match any known sequence marker
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe static bool IntPtrIsLessThan(IntPtr a, IntPtr b) => (a.ToPointer() < b.ToPointer());
 
