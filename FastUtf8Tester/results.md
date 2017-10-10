@@ -78,9 +78,9 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 ### Get UTF16 char count from UTF8
 
 * `System.Text.Encoding.UTF8`: 3.81 sec
-* `Utf8Util.ConvertUtf8ToUtf16`: 2.63 sec
+* `Utf8Util.ConvertUtf8ToUtf16`: 2.20 sec
 
-30% reduction in runtime
+42% reduction in runtime
 
 ## Chinese
 
@@ -97,6 +97,6 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 ### Get UTF16 char count from UTF8
 
 * `System.Text.Encoding.UTF8`: 9.48 sec
-* `Utf8Util.ConvertUtf8ToUtf16`: 5.00 sec
+* `Utf8Util.ConvertUtf8ToUtf16`: 4.07 sec
 
-47% reduction in runtime
+57% reduction in runtime

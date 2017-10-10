@@ -262,19 +262,17 @@ namespace FastUtf8Tester
 
                     Debug.Assert(Utf8DWordBeginsWithThreeByteMask(thisDWord));
 
-                    // Validation: use the second byte to determine what's an allowable first byte
-                    // per the above table.
+                    // Big-endian examples of using the above validation table:
+                    // E0A0 = 1110 0000 1010 0000 => invalid (overlong ) patterns are 1110 0000 100# ####
+                    // ED9F = 1110 1101 1001 1111 => invalid (surrogate) patterns are 1110 1101 101# ####
+                    // If using the bitmask ......................................... 0000 1111 0010 0000 (=0F20),
+                    // Then invalid (overlong) patterns match the comparand ......... 0000 0000 0000 0000 (=0000),
+                    // And invalid (surrogate) patterns match the comparand ......... 0000 1101 0010 0000 (=0D20).
 
                     if (BitConverter.IsLittleEndian)
                     {
-                        if ((thisDWord & 0xFFFFU) >= 0xA000U)
-                        {
-                            if ((thisDWord & 0xFFU) == 0xEDU) { goto Error; }
-                        }
-                        else
-                        {
-                            if ((thisDWord & 0xFFU) == 0xE0U) { goto Error; }
-                        }
+                        uint toValidate = thisDWord & 0x0000200FU;
+                        if ((toValidate == 0U) || (toValidate == 0x0000200DU)) { goto Error; }
                     }
                     else
                     {
@@ -291,7 +289,7 @@ namespace FastUtf8Tester
                     // that there's another three-byte sequence coming, try jumping directly to the 3-byte
                     // validation logic instead of the beginning of the loop.
 
-                    if (inputBufferRemainingBytes >= sizeof(uint) && Utf8DWordEndsWithThreeByteSequenceMarker(thisDWord))
+                    if (Utf8DWordEndsWithThreeByteSequenceMarker(thisDWord) && inputBufferRemainingBytes >= sizeof(uint))
                     {
                         thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
                         goto BeforeProcessThreeByteSequence;
