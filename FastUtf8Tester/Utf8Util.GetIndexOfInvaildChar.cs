@@ -8,6 +8,12 @@ namespace FastUtf8Tester
     internal static partial class Utf8Util
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetIndexOfFirstInvalidByte(ReadOnlySpan<byte> utf8)
+        {
+            return GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out _, out _);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetRuneCount(ReadOnlySpan<byte> utf8)
         {
             return (GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out _) < 0)
@@ -30,7 +36,7 @@ namespace FastUtf8Tester
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsValidUtf8Sequence(ReadOnlySpan<byte> buffer)
         {
-            return GetIndexOfFirstInvalidUtf8CharCore(ref buffer.DangerousGetPinnableReference(), buffer.Length, out _, out _) < 0;
+            return GetIndexOfFirstInvalidByte(buffer) < 0;
         }
 
         private static int GetIndexOfFirstInvalidUtf8CharCore(ref byte inputBuffer, int inputLength, out int runeCount, out int surrogateCount)
