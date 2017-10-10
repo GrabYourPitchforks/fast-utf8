@@ -208,6 +208,8 @@ namespace FastUtf8Tester
 
                 // Check the 2-byte case.
 
+                BeforeProcessTwoByteSequence:
+
                 if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
                 {
                     // Per Table 3-7, valid sequences are:
@@ -274,10 +276,9 @@ namespace FastUtf8Tester
 
                     ConsumeSingleKnownGoodRunOfTwoBytes:
 
-
                     // The buffer contains a 2-byte sequence followed by 2 bytes that aren't a 2-byte sequence.
                     // Unlikely that a 3-byte sequence would follow a 2-byte sequence, so perhaps remaining
-                    // bytes are ASCII ?
+                    // bytes are ASCII?
 
                     if (Utf8DWordThirdByteIsAscii(thisDWord))
                     {
@@ -292,6 +293,15 @@ namespace FastUtf8Tester
                             inputBufferCurrentOffset += 3; // a 2-byte sequence + 1 ASCII byte
                             inputBufferRemainingBytes -= 3; // a 2-byte sequence + 1 ASCII byte
                             tempRuneCount--; // 2-byte sequence + 1 ASCII bytes -> 2 runes
+
+                            // A two-byte sequence followed by an ASCII byte followed by a non-ASCII byte.
+                            // Read in the next DWORD and jump directly to the start of the multi-byte processing block.
+
+                            if (inputBufferRemainingBytes >= sizeof(uint))
+                            {
+                                thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                                goto BeforeProcessTwoByteSequence;
+                            }
                         }
                     }
                     else
