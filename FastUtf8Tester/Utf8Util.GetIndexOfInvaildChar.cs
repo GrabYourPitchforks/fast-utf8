@@ -274,12 +274,33 @@ namespace FastUtf8Tester
 
                     ConsumeSingleKnownGoodRunOfTwoBytes:
 
-                    // We have only one run of two bytes. The next two bytes aren't a two-byte character,
-                    // so we'll just jump straight back to the beginning of the loop.
 
-                    inputBufferCurrentOffset += 2;
-                    inputBufferRemainingBytes -= 2;
-                    tempRuneCount--; // 2 bytes -> 1 rune
+                    // The buffer contains a 2-byte sequence followed by 2 bytes that aren't a 2-byte sequence.
+                    // Unlikely that a 3-byte sequence would follow a 2-byte sequence, so perhaps remaining
+                    // bytes are ASCII ?
+
+                    if (Utf8DWordThirdByteIsAscii(thisDWord))
+                    {
+                        if (Utf8DWordFourthByteIsAscii(thisDWord))
+                        {
+                            inputBufferCurrentOffset += 4; // a 2-byte sequence + 2 ASCII bytes
+                            inputBufferRemainingBytes -= 4; // a 2-byte sequence + 2 ASCII bytes
+                            tempRuneCount--; // 2-byte sequence + 2 ASCII bytes -> 3 runes
+                        }
+                        else
+                        {
+                            inputBufferCurrentOffset += 3; // a 2-byte sequence + 1 ASCII byte
+                            inputBufferRemainingBytes -= 3; // a 2-byte sequence + 1 ASCII byte
+                            tempRuneCount--; // 2-byte sequence + 1 ASCII bytes -> 2 runes
+                        }
+                    }
+                    else
+                    {
+                        inputBufferCurrentOffset += 2;
+                        inputBufferRemainingBytes -= 2;
+                        tempRuneCount--; // 2-byte sequence -> 1 rune1
+                    }
+
                     continue;
                 }
 

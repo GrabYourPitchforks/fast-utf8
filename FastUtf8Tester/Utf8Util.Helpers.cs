@@ -613,14 +613,16 @@ namespace FastUtf8Tester
         private static bool IsSecondWordWellFormedTwoByteSequence(uint value)
         {
             // ASSUMPTION: Caller has already checked the '110y yyyy 10xx xxxx' mask of the input.
-            Debug.Assert(Utf8DWordBeginsWithTwoByteMask(value));
+            Debug.Assert(Utf8DWordEndsWithTwoByteMask(value));
 
             // Per Table 3-7, first byte of two-byte sequence must be within range C2 .. DF.
-            // Since we already validated it's 80 <= ?? <= DF (per mask check earlier), now only need
-            // to check that it's >= C2.
+            // We already validated that it's 80 .. DF (per mask check earlier).
+            // C2 = 1100 0010
+            // DF = 1101 1111
+            // This means that we can use the mask 0001 1110 (1E) and a non-zero comparand.
 
-            return (BitConverter.IsLittleEndian && ((value & 0x00FF0000U) >= 0x00C20000U))
-                || (!BitConverter.IsLittleEndian && ((value & 0xFF00U) >= 0xC200U));
+            return (BitConverter.IsLittleEndian && ((value & 0x001E0000U) != 0U))
+                || (!BitConverter.IsLittleEndian && ((value & 0x1E00U) != 0U));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
