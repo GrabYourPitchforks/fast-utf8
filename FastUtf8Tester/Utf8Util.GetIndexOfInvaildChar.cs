@@ -2,11 +2,14 @@
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace FastUtf8Tester
 {
     internal static partial class Utf8Util
     {
+        private static readonly DecoderFallback _defaultFallback = new DecoderReplacementFallback("\uFFFD");
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetIndexOfFirstInvalidByte(ReadOnlySpan<byte> utf8)
         {
@@ -24,40 +27,45 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int GetUtf16CharCount(ReadOnlySpan<byte> utf8)
+        public static int GetUtf16CharCount(ReadOnlySpan<byte> utf8, DecoderFallback fallback = null)
         {
-            return (GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out int surrogateCount) < 0)
-                ? runeCount + surrogateCount /* don't need checked addition since UTF16 char count can never exceed input byte count */
-                : throw new ArgumentException(
-                    message: "Invalid data.",
-                    paramName: nameof(utf8));
+            int offsetOfInvalidData = GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out int surrogateCount);
+            int utf16CharsCount = runeCount + surrogateCount;
+            if (offsetOfInvalidData >= 0)
+            {
+                checked { utf16CharsCount += GetUtf16CharCountWithFallback(utf8.Slice(offsetOfInvalidData), fallback); }
+            }
+            return utf16CharsCount;
         }
 
-        public static int GetUtf16CharCountWithFallback(ReadOnlySpan<byte> utf8)
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static int GetUtf16CharCountWithFallback(ReadOnlySpan<byte> sequenceThatBeginsWithInvalidData, DecoderFallback fallback)
         {
-            int totalUtf16CharCount = 0;
-            int offset = 0;
+            DecoderFallbackBuffer buffer = (fallback ?? _defaultFallback).CreateFallbackBuffer();
+            int utf16CharCount = 0;
+
             while (true)
             {
-                int indexOfFirstInvalidByte = GetIndexOfFirstInvalidUtf8CharCore(
-                    ref Unsafe.Add(ref utf8.DangerousGetPinnableReference(), offset),
-                    inputLength: utf8.Length - offset,
-                    runeCount: out int runeCount,
-                    surrogateCount: out int surrogateCount);
-
-                int thisIterUtf16CharCount = runeCount + surrogateCount; // guaranteed no overflow
-                checked { totalUtf16CharCount += thisIterUtf16CharCount; } // but this might overflow due to error handling
-
-                if (indexOfFirstInvalidByte < 0)
+                int numInvalidBytes = GetInvalidByteCount(ref sequenceThatBeginsWithInvalidData.DangerousGetPinnableReference(), sequenceThatBeginsWithInvalidData.Length);
+                var invalidByteArray = sequenceThatBeginsWithInvalidData.Slice(0, numInvalidBytes).ToArray();
+                buffer.Reset();
+                if (buffer.Fallback(invalidByteArray, 0))
                 {
-                    return totalUtf16CharCount; // end of data
+                    checked { utf16CharCount += buffer.Remaining; }
+                }
+
+                sequenceThatBeginsWithInvalidData = sequenceThatBeginsWithInvalidData.Slice(numInvalidBytes);
+                int newOffset = GetIndexOfFirstInvalidUtf8CharCore(ref sequenceThatBeginsWithInvalidData.DangerousGetPinnableReference(), sequenceThatBeginsWithInvalidData.Length, out int runeCount, out int surrogateCount);
+                int numUtf16CharsSeenThisLoop = runeCount + surrogateCount; // will never overflow
+                checked { utf16CharCount += numUtf16CharsSeenThisLoop; }
+
+                if (newOffset < 0)
+                {
+                    return utf16CharCount;
                 }
                 else
                 {
-                    offset += indexOfFirstInvalidByte;
-                    int numInvalidBytesToReplace = GetInvalidByteCount(ref Unsafe.Add(ref utf8.DangerousGetPinnableReference(), offset), utf8.Length - offset);
-                    checked { totalUtf16CharCount++; } // pretend we're writing out U+FFFD
-                    offset += numInvalidBytesToReplace;
+                    sequenceThatBeginsWithInvalidData = sequenceThatBeginsWithInvalidData.Slice(newOffset);
                 }
             }
         }
