@@ -110,24 +110,24 @@ namespace FastUtf8Tester
         public static int GetLengthOfTruncatedSequenceAtEndOfString(ReadOnlySpan<byte> data) => throw new NotImplementedException();
 
         /// <summary>
-        /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127).
+        /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127, inclusive).
         /// </summary>
         public static bool IsAsciiValue(byte value) => throw new NotImplementedException();
 
         /// <summary>
-        /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127).
+        /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127, inclusive).
         /// </summary>
         public static bool IsAsciiValue(uint value) => throw new NotImplementedException();
 
         /// <summary>
-        /// Returns <see langword="true"/> iff <paramref name="value"/> is a UTF-8 continuation byte;
-        /// that is, its bits are 10xxxxxx, where x is any value.
+        /// Returns <see langword="true"/> iff <paramref name="value"/> is a UTF-8 continuation byte.
+        /// A UTF-8 continuation byte is a byte whose value is in the range 0x80-0xBF, inclusive.
         /// </summary>
         public static bool IsUtf8ContinuationByte(byte value) => throw new NotImplementedException();
 
         /// <summary>
-        /// Returns <see langword="true"/> iff <paramref name="value"/> is a UTF-8 continuation byte;
-        /// that is, its bits are 10xxxxxx, where x is any value.
+        /// Returns <see langword="true"/> iff <paramref name="value"/> is a UTF-8 continuation byte.
+        /// A UTF-8 continuation byte is a byte whose value is in the range 0x80-0xBF, inclusive.
         /// </summary>
         /// <remarks>
         /// Only the low-order byte of <paramref name="value"/> is checked.
