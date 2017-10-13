@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Text;
 
 // TODO: Change all of the devdoc to use active tense instead of past tense.
 
@@ -15,6 +13,11 @@ namespace FastUtf8Tester
     /// </remarks>
     public static class Utf8Utility
     {
+        /// <summary>
+        /// The Unicode Replacement Character (U+FFFD) as a UTF-8 sequence ([ EF BF BD ]).
+        /// </summary>
+        public static ReadOnlySpan<byte> ReplacementCharacterByteSequence { get => throw new NotImplementedException(); }
+
         /// <summary>
         /// If <paramref name="data"/> is a well-formed UTF-8 string and <paramref name="suppressStringCreationOnValidInput"/> is <see langword="false"/>, returns <paramref name="data"/> as a byte array.
         /// If <paramref name="data"/> is a well-formed UTF-8 string and <paramref name="suppressStringCreationOnValidInput"/> is <see langword="true"/>, returns <see langword="null"/>.
