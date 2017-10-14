@@ -38,6 +38,24 @@ namespace FastUtf8Tester
         /// </remarks>
         public static NativeMemory Allocate(int cb, PoisonPagePlacement placement)
         {
+            var retVal = AllocateWithoutDataPopulation(cb, placement);
+            new Random().NextBytes(retVal.GetSpan()); // doesn't need to be cryptographically strong
+            return retVal;
+        }
+
+        /// <summary>
+        /// Similar to <see cref="Allocate(int, PoisonPagePlacement)"/>, but populates the allocated
+        /// native memory block from existing data rather than using random data.
+        /// </summary>
+        public static NativeMemory AllocateFromExistingData(ReadOnlySpan<byte> data, PoisonPagePlacement placement)
+        {
+            var retVal = AllocateWithoutDataPopulation(data.Length, placement);
+            data.CopyTo(retVal.GetSpan());
+            return retVal;
+        }
+
+        private static NativeMemory AllocateWithoutDataPopulation(int cb, PoisonPagePlacement placement)
+        {
             //
             // PRECONDITION CHECKS
             //
@@ -124,18 +142,14 @@ namespace FastUtf8Tester
                 }
             }
 
-            // Done allocating! Now populate it with random data and return to the caller.
+            // Done allocating! Now return to the caller.
 
-            var retVal = new NativeMemory(
+            return new NativeMemory(
                 handle: handle,
                 offset: (placement == PoisonPagePlacement.BeforeSpan)
                     ? SystemPageSize /* bypass leading poison page */
                     : checked((int)(totalBytesToAllocate - SystemPageSize - cb)) /* go just up to trailing poison page */,
                 length: cb);
-
-            new Random().NextBytes(retVal.GetSpan()); // doesn't need to be cryptographically strong
-
-            return retVal;
         }
 
         /// <summary>
