@@ -25,31 +25,6 @@ namespace FastUtf8Tester
         }
         
         /// <summary>
-        /// Gets the <see cref="Span{byte}"/> which represents this native memory.
-        /// This <see cref="NativeMemory"/> instance must be kept alive while working with the span.
-        /// </summary>
-        public unsafe Span<byte> Span
-        {
-            [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
-            get
-            {
-                bool refAdded = false;
-                try
-                {
-                    _handle.DangerousAddRef(ref refAdded);
-                    return new Span<byte>((void*)(_handle.DangerousGetHandle() + _offset), _length);
-                }
-                finally
-                {
-                    if (refAdded)
-                    {
-                        _handle.DangerousRelease();
-                    }
-                }
-            }
-        }
-
-        /// <summary>
         /// Returns a value stating whether this native memory block is readonly.
         /// </summary>
         public bool IsReadonly => (Protection != VirtualAllocProtection.PAGE_READWRITE);
@@ -104,6 +79,31 @@ namespace FastUtf8Tester
                         {
                             _handle.DangerousRelease();
                         }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the <see cref="Span{byte}"/> which represents this native memory.
+        /// This <see cref="NativeMemory"/> instance must be kept alive while working with the span.
+        /// </summary>
+        public unsafe Span<byte> Span
+        {
+            [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
+            get
+            {
+                bool refAdded = false;
+                try
+                {
+                    _handle.DangerousAddRef(ref refAdded);
+                    return new Span<byte>((void*)(_handle.DangerousGetHandle() + _offset), _length);
+                }
+                finally
+                {
+                    if (refAdded)
+                    {
+                        _handle.DangerousRelease();
                     }
                 }
             }
@@ -238,7 +238,7 @@ namespace FastUtf8Tester
         /// Sets this native memory block to be read+write.
         /// This method has no effect if the memory block is zero length.
         /// </summary>
-        public void MakeReadWrite()
+        public void MakeWriteable()
         {
             Protection = VirtualAllocProtection.PAGE_READWRITE;
         }
