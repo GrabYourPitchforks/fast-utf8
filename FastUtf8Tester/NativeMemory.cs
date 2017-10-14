@@ -25,10 +25,28 @@ namespace FastUtf8Tester
         }
 
         /// <summary>
+        /// Convenience cast operator which is equivalent to calling the <see cref="Buffer"/>
+        /// property getter and casting the result to a <see cref="ReadOnlySpan{byte}"/>.
+        /// </summary>
+        public static implicit operator ReadOnlySpan<byte>(NativeMemory memory)
+        {
+            return memory.Buffer;
+        }
+
+        /// <summary>
+        /// Convenience cast operator which is equivalent to calling the <see cref="Buffer"/>
+        /// property getter.
+        /// </summary>
+        public static implicit operator Span<byte>(NativeMemory memory)
+        {
+            return memory.Buffer;
+        }
+
+        /// <summary>
         /// Gets the <see cref="Span{byte}"/> which represents this native memory.
         /// This <see cref="NativeMemory"/> instance must be kept alive while working with the span.
         /// </summary>
-        public Span<byte> Buffer
+        public unsafe Span<byte> Buffer
         {
             [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
             get
@@ -37,13 +55,73 @@ namespace FastUtf8Tester
                 try
                 {
                     _handle.DangerousAddRef(ref refAdded);
-                    unsafe { return new Span<byte>((void*)(_handle.DangerousGetHandle() + _offset), _length); }
+                    return new Span<byte>((void*)(_handle.DangerousGetHandle() + _offset), _length);
                 }
                 finally
                 {
                     if (refAdded)
                     {
                         _handle.DangerousRelease();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns a value stating whether this native memory block is readonly.
+        /// </summary>
+        public bool IsReadonly => (Protection != VirtualAllocProtection.PAGE_READWRITE);
+
+        private unsafe VirtualAllocProtection Protection
+        {
+            get
+            {
+                bool refAdded = false;
+                try
+                {
+                    _handle.DangerousAddRef(ref refAdded);
+                    if (UnsafeNativeMethods.VirtualQuery(
+                        lpAddress: _handle.DangerousGetHandle() + _offset,
+                        lpBuffer: out var memoryInfo,
+                        dwLength: (IntPtr)sizeof(MEMORY_BASIC_INFORMATION)) == IntPtr.Zero)
+                    {
+                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                        throw new InvalidOperationException("VirtualQuery failed unexpectedly.");
+                    }
+                    return memoryInfo.Protect;
+                }
+                finally
+                {
+                    if (refAdded)
+                    {
+                        _handle.DangerousRelease();
+                    }
+                }
+            }
+            set
+            {
+                if (_length > 0)
+                {
+                    bool refAdded = false;
+                    try
+                    {
+                        _handle.DangerousAddRef(ref refAdded);
+                        if (!UnsafeNativeMethods.VirtualProtect(
+                            lpAddress: _handle.DangerousGetHandle() + _offset,
+                            dwSize: (IntPtr)_length,
+                            flNewProtect: value,
+                            lpflOldProtect: out _))
+                        {
+                            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
+                            throw new InvalidOperationException("VirtualProtect failed unexpectedly.");
+                        }
+                    }
+                    finally
+                    {
+                        if (refAdded)
+                        {
+                            _handle.DangerousRelease();
+                        }
                     }
                 }
             }
@@ -139,42 +217,17 @@ namespace FastUtf8Tester
                 throw new InvalidOperationException("VirtualAlloc failed unexpectedly.");
             }
 
-            // If there's a non-zero range to mark as READ+WRITE, do it now,
-            // then populate it with random data.
-
-            if (cb > 0)
-            {
-                bool refAdded = false;
-                try
-                {
-                    handle.DangerousAddRef(ref refAdded);
-                    if (!UnsafeNativeMethods.VirtualProtect(
-                        lpAddress: handle.DangerousGetHandle() + SystemPageSize /* bypass leading poison page */,
-                        dwSize: (IntPtr)cb,
-                        flNewProtect: VirtualAllocProtection.PAGE_READWRITE,
-                        lpflOldProtect: out _))
-                    {
-                        Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-                        throw new InvalidOperationException("VirtualProtect failed unexpectedly.");
-                    }
-                }
-                finally
-                {
-                    if (refAdded)
-                    {
-                        handle.DangerousRelease();
-                    }
-                }
-            }
-
-            // Done allocating! Now return to the caller.
+            // Done allocating! Now make read+write by default and return to the caller.
 
             return new NativeMemory(
                 handle: handle,
                 offset: (placement == PoisonPagePlacement.BeforeSpan)
                     ? SystemPageSize /* bypass leading poison page */
                     : checked((int)(totalBytesToAllocate - SystemPageSize - cb)) /* go just up to trailing poison page */,
-                length: cb);
+                length: cb)
+            {
+                Protection = VirtualAllocProtection.PAGE_READWRITE
+            };
         }
 
         /// <summary>
@@ -186,7 +239,25 @@ namespace FastUtf8Tester
             _handle.Dispose();
         }
 
-        internal sealed class VirtualAllocHandle : SafeHandle
+        /// <summary>
+        /// Sets this native memory block to be readonly. Writes to this block will cause an AV.
+        /// This method has no effect if the memory block is zero length.
+        /// </summary>
+        public void MakeReadonly()
+        {
+            Protection = VirtualAllocProtection.PAGE_READONLY;
+        }
+
+        /// <summary>
+        /// Sets this native memory block to be read+write.
+        /// This method has no effect if the memory block is zero length.
+        /// </summary>
+        public void MakeReadWrite()
+        {
+            Protection = VirtualAllocProtection.PAGE_READWRITE;
+        }
+
+        private sealed class VirtualAllocHandle : SafeHandle
         {
             // Called by P/Invoke when returning SafeHandles
             private VirtualAllocHandle()
@@ -240,6 +311,18 @@ namespace FastUtf8Tester
             PAGE_WRITECOMBINE = 0x400,
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MEMORY_BASIC_INFORMATION
+        {
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public VirtualAllocProtection AllocationProtect;
+            public IntPtr RegionSize;
+            public VirtualAllocAllocationType State;
+            public VirtualAllocProtection Protect;
+            public VirtualAllocAllocationType Type;
+        };
+
         [SuppressUnmanagedCodeSecurity]
         private static class UnsafeNativeMethods
         {
@@ -270,6 +353,13 @@ namespace FastUtf8Tester
                 [In] IntPtr dwSize,
                 [In] VirtualAllocProtection flNewProtect,
                 [Out] out VirtualAllocProtection lpflOldProtect);
+
+            // https://msdn.microsoft.com/en-us/library/windows/desktop/aa366902(v=vs.85).aspx
+            [DllImport(KERNEL32_LIB, CallingConvention = CallingConvention.Winapi, SetLastError = true)]
+            public static extern IntPtr VirtualQuery(
+                [In] IntPtr lpAddress,
+                [Out] out MEMORY_BASIC_INFORMATION lpBuffer,
+                [In] IntPtr dwLength);
         }
     }
 }
