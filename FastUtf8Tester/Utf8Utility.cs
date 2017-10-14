@@ -13,10 +13,12 @@ namespace FastUtf8Tester
     /// </remarks>
     public static class Utf8Utility
     {
+        private static readonly byte[] _replacementCharAsUtf8 = new byte[] { 0xEF, 0xBF, 0xBD };
+
         /// <summary>
-        /// The Unicode Replacement Character (U+FFFD) as a UTF-8 sequence ([ EF BF BD ]).
+        /// The Unicode Replacement Character (U+FFFD) as the three-byte UTF-8 sequence [ EF BF BD ].
         /// </summary>
-        public static ReadOnlySpan<byte> ReplacementCharacterByteSequence { get => throw new NotImplementedException(); }
+        public static ReadOnlySpan<byte> ReplacementCharacterByteSequence { get => _replacementCharAsUtf8; }
 
         /// <summary>
         /// If <paramref name="data"/> is a well-formed UTF-8 string and <paramref name="suppressStringCreationOnValidInput"/> is <see langword="false"/>, returns <paramref name="data"/> as a byte array.
