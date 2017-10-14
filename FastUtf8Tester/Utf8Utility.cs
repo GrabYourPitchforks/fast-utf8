@@ -39,7 +39,7 @@ namespace FastUtf8Tester
         /// This length can be determined by calling the <see cref="GetCountOfTotalBytesAfterInvalidSequenceReplacement(ReadOnlySpan{byte})"/> method.
         /// </remarks>
         public static int ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(ReadOnlySpan<byte> inputBuffer, Span<byte> outputBuffer) => throw new NotImplementedException();
-        
+
         /// <summary>
         /// If <paramref name="data"/> is an ill-formed UTF-8 string, returns the number of bytes required to hold the resulting
         /// string where each invalid sequence in the input data has been replaced with the Unicode Replacement Character (U+FFFD).
@@ -62,8 +62,37 @@ namespace FastUtf8Tester
         /// Returns 0 if <paramref name="firstByte"/> does not have any expected continuation bytes
         /// or if <paramref name="firstByte"/> cannot begin a well-formed UTF-8 sequence.
         /// </remarks>
-        public static int GetExpectedNumberOfContinuationBytes(byte firstByte) => throw new NotImplementedException();
-        
+        public static int GetExpectedNumberOfContinuationBytes(byte firstByte)
+        {
+            if (firstByte < (byte)0xC2)
+            {
+                // ASII (one-byte sequence), or
+                // continuation byte (invalid as first byte, hence no expected followers), or
+                // [ C0..C1 ] (always invalid UTF-8 byte, hence no expected followers)
+                return 0;
+            }
+            else if (firstByte < (byte)0xE0)
+            {
+                // [ C2..DF ] can start a two-byte sequence
+                return 1;
+            }
+            else if (firstByte < (byte)0xF0)
+            {
+                // [ E0..EF ] can start a three-byte sequence
+                return 2;
+            }
+            else if (firstByte <= (byte)0xF4)
+            {
+                // [ F0..F4 ] can start a four-byte sequence
+                return 3;
+            }
+            else
+            {
+                // [ F5 .. FF ] (always invalid UTF-8 byte, hence no expected followers)
+                return 0;
+            }
+        }
+
         /// <summary>
         /// Returns the index of the first byte of the first invalid UTF-8 sequence in <paramref name="data"/>,
         /// or -1 if <paramref name="data"/> is a well-formed UTF-8 string.
@@ -79,22 +108,22 @@ namespace FastUtf8Tester
         /// Returns 0 if <paramref name="data"/> begins with a well-formed UTF-8 sequence or is empty.
         /// </remarks>
         public static int GetLengthOfInvalidSequence(ReadOnlySpan<byte> data) => throw new NotImplementedException();
-        
+
         /// <summary>
         /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127, inclusive).
         /// </summary>
-        public static bool IsAsciiValue(byte value) => throw new NotImplementedException();
-        
+        public static bool IsAsciiValue(byte value) => (value < (byte)0x80);
+
         /// <summary>
         /// Returns <see langword="true"/> iff <paramref name="value"/> is a UTF-8 continuation byte.
         /// A UTF-8 continuation byte is a byte whose value is in the range 0x80-0xBF, inclusive.
         /// </summary>
-        public static bool IsUtf8ContinuationByte(byte value) => throw new NotImplementedException();
-        
+        public static bool IsUtf8ContinuationByte(byte value) => ((value & (byte)0xC0) == (byte)0x80);
+
         /// <summary>
         /// Returns <see langword="true"/> iff <paramref name="data"/> represents a well-formed UTF-8 string.
         /// </summary>
-        public static bool IsWellFormedUtf8String(ReadOnlySpan<byte> data) => throw new NotImplementedException();
+        public static bool IsWellFormedUtf8String(ReadOnlySpan<byte> data) => (GetIndexOfFirstInvalidUtf8Sequence(data) < 0);
 
         /// <summary>
         /// If <paramref name="data"/> ends with an incomplete multi-byte UTF-8 sequence, returns <see langword="true"/>
