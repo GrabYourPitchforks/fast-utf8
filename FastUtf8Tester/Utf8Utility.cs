@@ -39,22 +39,7 @@ namespace FastUtf8Tester
         /// This length can be determined by calling the <see cref="GetCountOfTotalBytesAfterInvalidSequenceReplacement(ReadOnlySpan{byte})"/> method.
         /// </remarks>
         public static int ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(ReadOnlySpan<byte> inputBuffer, Span<byte> outputBuffer) => throw new NotImplementedException();
-
-        /// <summary>
-        /// Returns <see langword="true"/> iff the input data terminates in the middle of a multi-byte UTF-8 sequence.
-        /// For example, this method returns <see langword="true"/> if the input data ends with the two bytes [ E0 BF ],
-        /// as the UTF-8 decoding procedure expects there to be a continuation byte immediately thereafter.
-        /// Returns <see langword="false"/> for an empty input string.
-        /// </summary>
-        public static bool DoesStringEndWithTruncatedSequence(ReadOnlySpan<byte> data) => throw new NotImplementedException();
-
-        /// <summary>
-        /// If the input data ends with a truncated multi-byte UTF-8 sequence (see <see cref="DoesStringEndWithTruncatedSequence(ReadOnlySpan{byte})"/>),
-        /// returns the number of remaining continuation bytes that the decoder expects to see in order to properly terminate
-        /// the sequence. Returns 0 if the string does not end with a truncated multi-byte UTF-8 sequence.
-        /// </summary>
-        public static int GetCountOfRemainingContinuationBytes(ReadOnlySpan<byte> data) => throw new NotImplementedException();
-
+        
         /// <summary>
         /// If <paramref name="data"/> is an ill-formed UTF-8 string, returns the number of bytes required to hold the resulting
         /// string where each invalid sequence in the input data has been replaced with the Unicode Replacement Character (U+FFFD).
@@ -78,16 +63,7 @@ namespace FastUtf8Tester
         /// or if <paramref name="firstByte"/> cannot begin a well-formed UTF-8 sequence.
         /// </remarks>
         public static int GetExpectedNumberOfContinuationBytes(byte firstByte) => throw new NotImplementedException();
-
-        /// <summary>
-        /// Given the first byte of a sequence, returns the expected number of continuation bytes
-        /// which should follow this byte.
-        /// </summary>
-        /// <remarks>
-        /// Only the low-order byte of <paramref name="firstByte"/> is checked.
-        /// </remarks>
-        public static int GetExpectedNumberOfContinuationBytes(uint firstByte) => throw new NotImplementedException();
-
+        
         /// <summary>
         /// Returns the index of the first byte of the first invalid UTF-8 sequence in <paramref name="data"/>,
         /// or -1 if <paramref name="data"/> is a well-formed UTF-8 string.
@@ -103,43 +79,40 @@ namespace FastUtf8Tester
         /// Returns 0 if <paramref name="data"/> begins with a well-formed UTF-8 sequence or is empty.
         /// </remarks>
         public static int GetLengthOfInvalidSequence(ReadOnlySpan<byte> data) => throw new NotImplementedException();
-
-        /// <summary>
-        /// If the input data ends with a truncated multi-byte UTF-8 sequence (see <see cref="DoesStringEndWithTruncatedSequence(ReadOnlySpan{byte})"/>),
-        /// returns the number of bytes at the end of the string that were part of the truncated sequence.
-        /// Returns 0 if the string does not end with a truncated multi-byte UTF-8 sequence.
-        /// </summary>
-        public static int GetLengthOfTruncatedSequenceAtEndOfString(ReadOnlySpan<byte> data) => throw new NotImplementedException();
-
+        
         /// <summary>
         /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127, inclusive).
         /// </summary>
         public static bool IsAsciiValue(byte value) => throw new NotImplementedException();
-
-        /// <summary>
-        /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127, inclusive).
-        /// </summary>
-        public static bool IsAsciiValue(uint value) => throw new NotImplementedException();
-
+        
         /// <summary>
         /// Returns <see langword="true"/> iff <paramref name="value"/> is a UTF-8 continuation byte.
         /// A UTF-8 continuation byte is a byte whose value is in the range 0x80-0xBF, inclusive.
         /// </summary>
         public static bool IsUtf8ContinuationByte(byte value) => throw new NotImplementedException();
+        
+        /// <summary>
+        /// Returns <see langword="true"/> iff <paramref name="data"/> represents a well-formed UTF-8 string.
+        /// </summary>
+        public static bool IsWellFormedUtf8String(ReadOnlySpan<byte> data) => throw new NotImplementedException();
 
         /// <summary>
-        /// Returns <see langword="true"/> iff <paramref name="value"/> is a UTF-8 continuation byte.
-        /// A UTF-8 continuation byte is a byte whose value is in the range 0x80-0xBF, inclusive.
+        /// If <paramref name="data"/> ends with an incomplete multi-byte UTF-8 sequence, returns <see langword="true"/>
+        /// and populates <paramref name="incompleteByteCount"/> and <paramref name="remainingByteCount"/> with the
+        /// number of bytes present in the incomplete sequence and the number of bytes remaining to complete the
+        /// sequence, respectively. If <paramref name="data"/> does not end with an incomplete multi-byte UTF-8
+        /// sequence, returns <see langword="false"/> and sets both <paramref name="incompleteByteCount"/> and
+        /// <paramref name="remainingByteCount"/> to 0.
         /// </summary>
         /// <remarks>
-        /// Only the low-order byte of <paramref name="value"/> is checked.
+        /// Consider a string that ends in the byte sequence [ F0 9F 98 ]. These three bytes are not well-formed on
+        /// their own; they're only well-formed as the first part of a four-byte sequence such as [ F0 9F 98 80 ].
+        /// In this case the method will return <see langword="true"/> to indicate that the sequence is incomplete,
+        /// <paramref name="incompleteByteCount"/> will be set to 3 to indicate that there are 3 bytes present in
+        /// the incomplete sequence, and <paramref name="remainingByteCount"/> will be set to 1 to indicate that
+        /// there is 1 byte remaining before the four-byte sequence is complete.
         /// </remarks>
-        public static bool IsUtf8ContinuationByte(uint value) => throw new NotImplementedException();
-
-        /// <summary>
-        /// Returns <see langword="true"/> iff <paramref name="buffer"/> represents a well-formed UTF-8 string.
-        /// </summary>
-        public static bool IsWellFormedUtf8String(ReadOnlySpan<byte> buffer) => throw new NotImplementedException();
+        public static bool StringEndsWithIncompleteUtf8Sequence(ReadOnlySpan<byte> data, out int incompleteByteCount, out int remainingByteCount) => throw new NotImplementedException();
 
         /// <summary>
         /// Attempts to read the first rune (24-bit scalar value) from the provided UTF-8 sequence.
