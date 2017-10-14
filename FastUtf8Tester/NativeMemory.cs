@@ -203,7 +203,7 @@ namespace FastUtf8Tester
                 totalBytesToAllocate += 2 * SystemPageSize;
             }
 
-            // Reserve and commit the entire range, marking NOACCESS.
+            // Reserve and commit the entire range as NOACCESS.
 
             var handle = UnsafeNativeMethods.VirtualAlloc(
                 lpAddress: IntPtr.Zero,
@@ -217,13 +217,17 @@ namespace FastUtf8Tester
                 throw new InvalidOperationException("VirtualAlloc failed unexpectedly.");
             }
 
-            // Done allocating! Now make read+write by default and return to the caller.
+            // Done allocating! Now carve out a READWRITE section bookended by the NOACCESS
+            // pages and return that carved-out section to the caller. Since memory protection
+            // flags only apply at page-level granularity, we need to "left-align" or "right-
+            // align" the section we carve out so that it's guaranteed adjacent to one of
+            // the NOACCESS bookend pages.
 
             return new NativeMemory(
                 handle: handle,
                 offset: (placement == PoisonPagePlacement.BeforeSpan)
-                    ? SystemPageSize /* bypass leading poison page */
-                    : checked((int)(totalBytesToAllocate - SystemPageSize - cb)) /* go just up to trailing poison page */,
+                    ? SystemPageSize /* just after leading poison page */
+                    : checked((int)(totalBytesToAllocate - SystemPageSize - cb)) /* just beforr trailing poison page */,
                 length: cb)
             {
                 Protection = VirtualAllocProtection.PAGE_READWRITE
