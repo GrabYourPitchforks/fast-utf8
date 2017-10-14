@@ -6,7 +6,7 @@ using System.Security;
 namespace FastUtf8Tester
 {
     /// <summary>
-    /// Represents a region of native memory. The <see cref="Buffer"/> property can be used
+    /// Represents a region of native memory. The <see cref="Span"/> property can be used
     /// to get a span backed by this memory region.
     /// </summary>
     public sealed class NativeMemory : IDisposable
@@ -23,30 +23,12 @@ namespace FastUtf8Tester
             _offset = offset;
             _length = length;
         }
-
-        /// <summary>
-        /// Convenience cast operator which is equivalent to calling the <see cref="Buffer"/>
-        /// property getter and casting the result to a <see cref="ReadOnlySpan{byte}"/>.
-        /// </summary>
-        public static implicit operator ReadOnlySpan<byte>(NativeMemory memory)
-        {
-            return memory.Buffer;
-        }
-
-        /// <summary>
-        /// Convenience cast operator which is equivalent to calling the <see cref="Buffer"/>
-        /// property getter.
-        /// </summary>
-        public static implicit operator Span<byte>(NativeMemory memory)
-        {
-            return memory.Buffer;
-        }
-
+        
         /// <summary>
         /// Gets the <see cref="Span{byte}"/> which represents this native memory.
         /// This <see cref="NativeMemory"/> instance must be kept alive while working with the span.
         /// </summary>
-        public unsafe Span<byte> Buffer
+        public unsafe Span<byte> Span
         {
             [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
             get
@@ -142,7 +124,7 @@ namespace FastUtf8Tester
         public static NativeMemory Allocate(int cb, PoisonPagePlacement placement)
         {
             var retVal = AllocateWithoutDataPopulation(cb, placement);
-            new Random().NextBytes(retVal.Buffer); // doesn't need to be cryptographically strong
+            new Random().NextBytes(retVal.Span); // doesn't need to be cryptographically strong
             return retVal;
         }
 
@@ -153,7 +135,7 @@ namespace FastUtf8Tester
         public static NativeMemory AllocateFromExistingData(ReadOnlySpan<byte> data, PoisonPagePlacement placement)
         {
             var retVal = AllocateWithoutDataPopulation(data.Length, placement);
-            data.CopyTo(retVal.Buffer);
+            data.CopyTo(retVal.Span);
             return retVal;
         }
 
