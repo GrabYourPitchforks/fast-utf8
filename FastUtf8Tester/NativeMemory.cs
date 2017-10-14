@@ -6,7 +6,7 @@ using System.Security;
 namespace FastUtf8Tester
 {
     /// <summary>
-    /// Represents a region of native memory. The <see cref="GetSpan"/> method can be used
+    /// Represents a region of native memory. The <see cref="Buffer"/> property can be used
     /// to get a span backed by this memory region.
     /// </summary>
     public sealed class NativeMemory : IDisposable
@@ -25,6 +25,31 @@ namespace FastUtf8Tester
         }
 
         /// <summary>
+        /// Gets the <see cref="Span{byte}"/> which represents this native memory.
+        /// This <see cref="NativeMemory"/> instance must be kept alive while working with the span.
+        /// </summary>
+        public Span<byte> Buffer
+        {
+            [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
+            get
+            {
+                bool refAdded = false;
+                try
+                {
+                    _handle.DangerousAddRef(ref refAdded);
+                    unsafe { return new Span<byte>((void*)(_handle.DangerousGetHandle() + _offset), _length); }
+                }
+                finally
+                {
+                    if (refAdded)
+                    {
+                        _handle.DangerousRelease();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Allocates a new <see cref="NativeMemory"/> region which is immediately preceded by
         /// or immediately followed by a poison (MEM_NOACCESS) page. If <paramref name="placement"/>
         /// is <see cref="PoisonPagePlacement.BeforeSpan"/>, then attempting to read the memory
@@ -39,7 +64,7 @@ namespace FastUtf8Tester
         public static NativeMemory Allocate(int cb, PoisonPagePlacement placement)
         {
             var retVal = AllocateWithoutDataPopulation(cb, placement);
-            new Random().NextBytes(retVal.GetSpan()); // doesn't need to be cryptographically strong
+            new Random().NextBytes(retVal.Buffer); // doesn't need to be cryptographically strong
             return retVal;
         }
 
@@ -50,7 +75,7 @@ namespace FastUtf8Tester
         public static NativeMemory AllocateFromExistingData(ReadOnlySpan<byte> data, PoisonPagePlacement placement)
         {
             var retVal = AllocateWithoutDataPopulation(data.Length, placement);
-            data.CopyTo(retVal.GetSpan());
+            data.CopyTo(retVal.Buffer);
             return retVal;
         }
 
@@ -159,29 +184,6 @@ namespace FastUtf8Tester
         public void Dispose()
         {
             _handle.Dispose();
-        }
-
-        /// <summary>
-        /// Gets the <see cref="Span{byte}"/> which represents this native memory.
-        /// This <see cref="NativeMemory"/> instance must be kept alive while working with the span.
-        /// </summary>
-        /// <returns></returns>
-        [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
-        public unsafe Span<byte> GetSpan()
-        {
-            bool refAdded = false;
-            try
-            {
-                _handle.DangerousAddRef(ref refAdded);
-                return new Span<byte>((void*)(_handle.DangerousGetHandle() + _offset), _length);
-            }
-            finally
-            {
-                if (refAdded)
-                {
-                    _handle.DangerousRelease();
-                }
-            }
         }
 
         internal sealed class VirtualAllocHandle : SafeHandle
