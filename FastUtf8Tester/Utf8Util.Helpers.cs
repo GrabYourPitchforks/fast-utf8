@@ -505,6 +505,6 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsSurrogateFast(uint @char) => ((@char & 0xF800U) == 0xD800U);
+        public static bool IsSurrogateFast(uint @char) => ((@char & 0xF800U) == 0xD800U);
     }
 }

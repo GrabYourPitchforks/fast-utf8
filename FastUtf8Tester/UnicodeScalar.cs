@@ -21,6 +21,27 @@ namespace FastUtf8Tester
         public readonly int Value; // = U+0000 if using default init
 
         /// <summary>
+        /// Constructs a Unicode scalar from the given UTF-16 code point.
+        /// The code point must not be a surrogate.
+        /// </summary>
+        /// <param name="char"></param>
+        public UnicodeScalar(char @char)
+        {
+            // None of the APIs on this type are guaranteed to produce correct results
+            // if we don't validate the input during construction.
+
+            uint value = @char;
+            if (Utf8Util.IsSurrogateFast(value))
+            {
+                throw new ArgumentOutOfRangeException(
+                   message: "Value must be between U+0000 and U+D7FF, inclusive; or value must be between U+E000 and U+FFFF, inclusive.",
+                   paramName: nameof(@char));
+            }
+
+            Value = (int)value;
+        }
+
+        /// <summary>
         /// Constructs a Unicode scalar from the given value.
         /// The value must represent a valid scalar.
         /// </summary>
