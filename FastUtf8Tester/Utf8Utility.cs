@@ -126,6 +126,17 @@ namespace FastUtf8Tester
         public static bool IsWellFormedUtf8String(ReadOnlySpan<byte> data) => (GetIndexOfFirstInvalidUtf8Sequence(data) < 0);
 
         /// <summary>
+        /// Peeks at the first UTF-8 sequence in the input buffer and returns information about that
+        /// sequence. If the sequence is well-formed, returns <see cref="SequenceValidity.WellFormed"/>
+        /// and sets the <paramref name="scalarValue"/> output parameter to the scalar value encoded by
+        /// the sequence. If the return value is anything other than <see cref="SequenceValidity.WellFormed"/>,
+        /// sets the <paramref name="scalarValue"/> output parameter to <see cref="UnicodeScalar.ReplacementChar"/>.
+        /// In all cases, the <paramref name="numBytesConsumed"/> output parameter will contain the
+        /// number of UTF-8 code units read from the input buffer in order to make the determination.
+        /// </summary>
+        public static SequenceValidity PeekFirstSequence(ReadOnlySpan<byte> data, out int numBytesConsumed, out UnicodeScalar scalarValue) => throw new NotImplementedException();
+
+        /// <summary>
         /// If <paramref name="data"/> ends with an incomplete multi-byte UTF-8 sequence, returns <see langword="true"/>
         /// and populates <paramref name="incompleteByteCount"/> and <paramref name="remainingByteCount"/> with the
         /// number of bytes present in the incomplete sequence and the number of bytes remaining to complete the
