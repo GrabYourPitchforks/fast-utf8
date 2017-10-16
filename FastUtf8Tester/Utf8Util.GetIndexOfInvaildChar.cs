@@ -104,14 +104,14 @@ namespace FastUtf8Tester
 
             while (inputBufferRemainingBytes >= sizeof(uint))
             {
-                BeforeReadNextDWord:
+                BeforeReadDWord:
 
                 // Read 32 bits at a time. This is enough to hold any possible UTF8-encoded scalar.
 
                 Debug.Assert(inputLength - (int)inputBufferCurrentOffset >= sizeof(uint));
                 uint thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
 
-                AfterReadNextDWord:
+                AfterReadDWord:
 
                 // First, check for the common case of all-ASCII bytes.
 
@@ -127,7 +127,10 @@ namespace FastUtf8Tester
 
                     if (IntPtrIsLessThan(inputBufferCurrentOffset, inputBufferOffsetAtWhichToAllowUnrolling))
                     {
-                        goto BeforeReadNextDWord; // we think there's non-ASCII data coming, so don't bother loop unrolling
+                        // We saw non-ASCII data last time we tried loop unrolling, so don't bother going
+                        // down the unrolling path again until we've bypassed that data. No need to perform
+                        // a bounds check here since we already checked the bounds as part of the loop unrolling path.
+                        goto BeforeReadDWord;
                     }
                     else
                     {
@@ -141,7 +144,7 @@ namespace FastUtf8Tester
                                 if ((thisQWord & 0x8080808080808080U) != 0U)
                                 {
                                     inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + 2 * sizeof(ulong); // non-ASCII data incoming
-                                    goto BeforeReadNextDWord;
+                                    goto BeforeReadDWord;
                                 }
 
                                 inputBufferCurrentOffset += 2 * sizeof(ulong);
@@ -160,7 +163,7 @@ namespace FastUtf8Tester
                                 if ((thisDWord & 0x80808080U) != 0U)
                                 {
                                     inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + 4 * sizeof(uint); // non-ASCII data incoming
-                                    goto BeforeReadNextDWord;
+                                    goto BeforeReadDWord;
                                 }
 
                                 inputBufferCurrentOffset += 4 * sizeof(uint);
@@ -231,7 +234,7 @@ namespace FastUtf8Tester
 
                     if (Utf8DWordEndsWithTwoByteMask(thisDWord) && IsSecondWordWellFormedTwoByteSequence(thisDWord))
                     {
-                        ConsumeDualKnownGoodRunsOfTwoBytes:
+                        ConsumeTwoAdjacentKnownGoodTwoByteSequences:
 
                         // We have two runs of two bytes each.
                         inputBufferCurrentOffset += 4;
@@ -249,12 +252,12 @@ namespace FastUtf8Tester
                                 if (IsFirstWordWellFormedTwoByteSequence(thisDWord) && IsSecondWordWellFormedTwoByteSequence(thisDWord))
                                 {
                                     // Validated next bytes are 2x 2-byte sequences
-                                    goto ConsumeDualKnownGoodRunsOfTwoBytes;
+                                    goto ConsumeTwoAdjacentKnownGoodTwoByteSequences;
                                 }
                                 else
                                 {
                                     // Mask said it was 2x 2-byte sequences but validation failed, go to beginning of loop for error handling
-                                    goto AfterReadNextDWord;
+                                    goto AfterReadDWord;
                                 }
                             }
                             else if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
@@ -262,18 +265,18 @@ namespace FastUtf8Tester
                                 if (IsFirstWordWellFormedTwoByteSequence(thisDWord))
                                 {
                                     // Validated next bytes are a single 2-byte sequence with no valid 2-byte sequence following
-                                    goto ConsumeSingleKnownGoodRunOfTwoBytes;
+                                    goto ConsumeSingleKnownGoodTwoByteSequence;
                                 }
                                 else
                                 {
                                     // Mask said it was a 2-byte sequence but validation failed, go to beginning of loop for error handling
-                                    goto AfterReadNextDWord;
+                                    goto AfterReadDWord;
                                 }
                             }
                             else
                             {
                                 // Next bytes aren't a 2-byte sequence, go to beginning of loop for processing
-                                goto AfterReadNextDWord;
+                                goto AfterReadDWord;
                             }
                         }
                         else
@@ -282,7 +285,7 @@ namespace FastUtf8Tester
                         }
                     }
 
-                    ConsumeSingleKnownGoodRunOfTwoBytes:
+                    ConsumeSingleKnownGoodTwoByteSequence:
 
                     // The buffer contains a 2-byte sequence followed by 2 bytes that aren't a 2-byte sequence.
                     // Unlikely that a 3-byte sequence would follow a 2-byte sequence, so perhaps remaining
@@ -376,7 +379,7 @@ namespace FastUtf8Tester
                     {
                         inputBufferCurrentOffset += 1;
                         inputBufferRemainingBytes--;
-                        goto BeforeReadNextDWord;
+                        goto BeforeReadDWord;
                     }
 
                     continue; // didn't see a three-byte marker or ASCII value at end of DWORD, go back to start of loop
