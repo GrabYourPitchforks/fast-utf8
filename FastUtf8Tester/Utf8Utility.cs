@@ -97,9 +97,7 @@ namespace FastUtf8Tester
         /// Returns the index of the first byte of the first invalid UTF-8 sequence in <paramref name="data"/>,
         /// or -1 if <paramref name="data"/> is a well-formed UTF-8 string.
         /// </summary>
-        /// <param name="data"></param>
-        /// <returns></returns>
-        public static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> data) => throw new NotImplementedException();
+        public static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> data) => Utf8Util.GetIndexOfFirstInvalidByte(data);
 
         /// <summary>
         /// Returns the length of the ill-formed UTF-8 sequence at the beginning of an input buffer.

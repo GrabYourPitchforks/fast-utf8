@@ -26,19 +26,17 @@ namespace FastUtf8Tester
         /// </summary>
         /// <param name="char"></param>
         public UnicodeScalar(char @char)
+            : this((uint)@char)
         {
             // None of the APIs on this type are guaranteed to produce correct results
             // if we don't validate the input during construction.
 
-            uint value = @char;
-            if (Utf8Util.IsSurrogateFast(value))
+            if (Utf8Util.IsSurrogateFast((uint)Value))
             {
                 throw new ArgumentOutOfRangeException(
                    message: "Value must be between U+0000 and U+D7FF, inclusive; or value must be between U+E000 and U+FFFF, inclusive.",
                    paramName: nameof(@char));
             }
-
-            Value = (int)value;
         }
 
         /// <summary>
@@ -46,19 +44,47 @@ namespace FastUtf8Tester
         /// The value must represent a valid scalar.
         /// </summary>
         public UnicodeScalar(int value)
+            : this((uint)value)
         {
             // None of the APIs on this type are guaranteed to produce correct results
             // if we don't validate the input during construction.
 
-            if (!IsValidScalar((uint)value))
+            if (!IsValidScalar((uint)Value))
             {
                 throw new ArgumentOutOfRangeException(
                     message: "Value must be between U+0000 and U+D7FF, inclusive; or value must be between U+E000 and U+10FFFF, inclusive.",
                     paramName: nameof(value));
             }
-
-            Value = value;
         }
+
+        // non-validating ctor for internal use
+        private UnicodeScalar(uint value)
+        {
+            Value = (int)value;
+        }
+
+        /// <summary>
+        /// Converts a <see cref="char"/> to a <see cref="UnicodeScalar"/>.
+        /// Identical to calling <see cref="UnicodeScalar.UnicodeScalar(char)"/>.
+        /// </summary>
+        public static explicit operator UnicodeScalar(char @char) => new UnicodeScalar(@char);
+
+        /// <summary>
+        /// Converts an <see cref="int"/> to a <see cref="UnicodeScalar"/>.
+        /// Identical to calling <see cref="UnicodeScalar.UnicodeScalar(int)"/>.
+        /// </summary>
+        public static explicit operator UnicodeScalar(int value) => new UnicodeScalar(value);
+
+        /// <summary>
+        /// If this scalar is representable as a single UTF-16 code unit (see <see cref="Utf16CodeUnitCount"/>),
+        /// returns the scalar value as the UTF-16 code unit. Otherwise throws <see cref="OverflowException"/>.
+        /// </summary>
+        public static explicit operator char(UnicodeScalar value) => checked((char)value.Value);
+
+        /// <summary>
+        /// Returns the scalar value as a 24-bit integer. Equivalent to reading the <see cref="Value"/> field.
+        /// </summary>
+        public static explicit operator int(UnicodeScalar value) => value.Value;
 
         public static bool operator ==(UnicodeScalar a, UnicodeScalar b) => (a.Value == b.Value);
 
@@ -197,6 +223,8 @@ namespace FastUtf8Tester
                   paramName: nameof(utf8));
             }
         }
+
+        internal static UnicodeScalar CreateWithoutValidation(uint value) => new UnicodeScalar(value);
 
         public override bool Equals(object other) => ((other is UnicodeScalar) && this.Equals((UnicodeScalar)other));
 
