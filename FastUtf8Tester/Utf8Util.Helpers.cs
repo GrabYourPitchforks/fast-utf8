@@ -106,6 +106,9 @@ namespace FastUtf8Tester
         internal static bool IsWithinRangeInclusive(uint value, uint lowerBound, uint upperBound) => ((value - lowerBound) <= (upperBound - lowerBound));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool IsWithinRangeInclusive(byte value, byte lowerBound, byte upperBound) => ((byte)(value - lowerBound) <= (byte)(upperBound - lowerBound));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static uint GenerateUtf16CodeUnitFromUtf8CodeUnits(uint firstByte, uint secondByte)
         {
             return ((firstByte & 0x1FU) << 6)

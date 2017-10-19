@@ -132,7 +132,184 @@ namespace FastUtf8Tester
         /// In all cases, the <paramref name="numBytesConsumed"/> output parameter will contain the
         /// number of UTF-8 code units read from the input buffer in order to make the determination.
         /// </summary>
-        public static SequenceValidity PeekFirstSequence(ReadOnlySpan<byte> data, out int numBytesConsumed, out UnicodeScalar scalarValue) => throw new NotImplementedException();
+        public static SequenceValidity PeekFirstSequence(ReadOnlySpan<byte> data, out int numBytesConsumed, out UnicodeScalar scalarValue)
+        {
+            // This method is implemented to match the behavior of System.Text.Encoding.UTF8 in terms of
+            // how many bytes it consumes when reporting invalid sequences. The behavior is as follows:
+            //
+            // - Some bytes are *always* invalid (ranges [ C0..C1 ] and [ F5..FF ]), and when these
+            //   are encountered it's an invalid sequence of length 1.
+            //
+            // - Multi-byte sequences which are overlong are reported as an invalid sequence of length 2,
+            //   since per the Unicode Standard Table 3-7 it's always possible to tell these by the second byte.
+            //   Exception: Sequences which begin with [ C0..C1 ] are covered by the above case, thus length 1.
+            //
+            // - Multi-byte sequences which are improperly terminated (no continuation byte when one is
+            //   expected) are reported as invalid sequences up to and including the last seen continuation byte.
+
+            scalarValue = UnicodeScalar.ReplacementChar;
+
+            if (data.IsEmpty)
+            {
+                // No data to peek at
+                numBytesConsumed = 0;
+                return SequenceValidity.Empty;
+            }
+
+            byte firstByte = data[0];
+
+            if (IsAsciiValue(firstByte))
+            {
+                // ASCII byte = well-formed one-byte sequence.
+                scalarValue = UnicodeScalar.CreateWithoutValidation(firstByte);
+                numBytesConsumed = 1;
+                return SequenceValidity.WellFormed;
+            }
+
+            if (!Utf8Util.IsWithinRangeInclusive(firstByte, (byte)0xC2U, (byte)0xF4U))
+            {
+                // Standalone continuation byte or "always invalid" byte = ill-formed one-byte sequence.
+                goto InvalidOneByteSequence;
+            }
+
+            // At this point, we know we're working with a multi-byte sequence,
+            // and we know that at least the first byte is potentially valid.
+
+            if (data.Length < 2)
+            {
+                // One byte of an incomplete multi-byte sequence.
+                goto OneByteOfIncompleteMultiByteSequence;
+            }
+
+            byte secondByte = data[1];
+
+            if (!IsUtf8ContinuationByte(secondByte))
+            {
+                // One byte of an improperly terminated multi-byte sequence.
+                goto InvalidOneByteSequence;
+            }
+
+            if (firstByte < (byte)0xE0U)
+            {
+                // Well-formed two-byte sequence.
+                scalarValue = UnicodeScalar.CreateWithoutValidation((((uint)firstByte & 0x1FU) << 6) | ((uint)secondByte & 0x3FU));
+                numBytesConsumed = 2;
+                return SequenceValidity.WellFormed;
+            }
+
+            if (firstByte < (byte)0xF0U)
+            {
+                // Start of a three-byte sequence.
+                // Need to check for overlong or surrogate sequences.
+
+                uint scalar = (((uint)firstByte & 0x0FU) << 12) | (((uint)secondByte & 0x3FU) << 6);
+                if (scalar < 0x800U || Utf8Util.IsSurrogateFast(scalar)) { goto OverlongOutOfRangeOrSurrogateSequence; }
+
+                // At this point, we have a valid two-byte start of a three-byte sequence.
+
+                if (data.Length < 3)
+                {
+                    // Two bytes of an incomplete three-byte sequence.
+                    goto TwoBytesOfIncompleteMultiByteSequence;
+                }
+                else
+                {
+                    byte thirdByte = data[2];
+                    if (IsUtf8ContinuationByte(thirdByte))
+                    {
+                        // Well-formed three-byte sequence.
+                        scalar |= (uint)thirdByte & 0x3FU;
+                        scalarValue = UnicodeScalar.CreateWithoutValidation(scalar);
+                        numBytesConsumed = 3;
+                        return SequenceValidity.WellFormed;
+                    }
+                    else
+                    {
+                        // Two bytes of improperly terminated multi-byte sequence.
+                        goto InvalidTwoByteSequence;
+                    }
+                }
+            }
+
+            {
+                // Start of four-byte sequence.
+                // Need to check for overlong or out-of-range sequences.
+
+                uint scalar = (((uint)firstByte & 0x07U) << 18) | (((uint)secondByte & 0x3FU) << 12);
+                if (!Utf8Util.IsWithinRangeInclusive(scalar, 0x10000U, 0x10FFFFU)) { goto OverlongOutOfRangeOrSurrogateSequence; }
+
+                // At this point, we have a valid two-byte start of a four-byte sequence.
+
+                if (data.Length < 3)
+                {
+                    // Two bytes of an incomplete four-byte sequence.
+                    goto TwoBytesOfIncompleteMultiByteSequence;
+                }
+                else
+                {
+                    byte thirdByte = data[2];
+                    if (IsUtf8ContinuationByte(thirdByte))
+                    {
+                        // Valid three-byte start of a four-byte sequence.
+
+                        if (data.Length < 4)
+                        {
+                            // Three bytes of an incomplete four-byte sequence.
+                            goto ThreeBytesOfIncompleteMultiByteSequence;
+                        }
+                        else
+                        {
+                            byte fourthByte = data[3];
+                            if (IsUtf8ContinuationByte(fourthByte))
+                            {
+                                // Well-formed four-byte sequence.
+                                scalar |= (((uint)thirdByte & 0x3FU) << 6) | ((uint)fourthByte & 0x3FU);
+                                scalarValue = UnicodeScalar.CreateWithoutValidation(scalar);
+                                numBytesConsumed = 4;
+                                return SequenceValidity.WellFormed;
+                            }
+                            else
+                            {
+                                // Three bytes of an improperly terminated multi-byte sequence.
+                                goto InvalidThreeByteSequence;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Two bytes of improperly terminated multi-byte sequence.
+                        goto InvalidTwoByteSequence;
+                    }
+                }
+            }
+
+            // Everything below here is error handling.
+
+            InvalidOneByteSequence:
+            numBytesConsumed = 1;
+            return SequenceValidity.Invalid;
+
+            InvalidTwoByteSequence:
+            OverlongOutOfRangeOrSurrogateSequence:
+            numBytesConsumed = 2;
+            return SequenceValidity.Invalid;
+
+            InvalidThreeByteSequence:
+            numBytesConsumed = 3;
+            return SequenceValidity.Invalid;
+
+            OneByteOfIncompleteMultiByteSequence:
+            numBytesConsumed = 1;
+            return SequenceValidity.Incomplete;
+
+            TwoBytesOfIncompleteMultiByteSequence:
+            numBytesConsumed = 2;
+            return SequenceValidity.Incomplete;
+
+            ThreeBytesOfIncompleteMultiByteSequence:
+            numBytesConsumed = 3;
+            return SequenceValidity.Incomplete;
+        }
 
         /// <summary>
         /// If <paramref name="data"/> ends with an incomplete multi-byte UTF-8 sequence, returns <see langword="true"/>

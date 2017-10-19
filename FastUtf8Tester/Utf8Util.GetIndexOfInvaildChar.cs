@@ -331,14 +331,14 @@ namespace FastUtf8Tester
 
                 if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
                 {
+                    // We need to check for overlong or surrogate three-byte sequences.
+                    //
                     // Per Table 3-7, valid sequences are:
                     // [   E0   ] [ A0..BF ] [ 80..BF ]
                     // [ E1..EC ] [ 80..BF ] [ 80..BF ]
                     // [   ED   ] [ 80..9F ] [ 80..BF ]
                     // [ EE..EF ] [ 80..BF ] [ 80..BF ]
-
-                    Debug.Assert(Utf8DWordBeginsWithThreeByteMask(thisDWord));
-
+                    //
                     // Big-endian examples of using the above validation table:
                     // E0A0 = 1110 0000 1010 0000 => invalid (overlong ) patterns are 1110 0000 100# ####
                     // ED9F = 1110 1101 1001 1111 => invalid (surrogate) patterns are 1110 1101 101# ####
@@ -348,13 +348,13 @@ namespace FastUtf8Tester
 
                     if (BitConverter.IsLittleEndian)
                     {
-                        uint toValidate = thisDWord & 0x0000200FU;
-                        if ((toValidate == 0U) || (toValidate == 0x0000200DU)) { goto Error; }
+                        uint comparand = thisDWord & 0x0000200FU;
+                        if ((comparand == 0U) || (comparand == 0x0000200DU)) { goto Error; }
                     }
                     else
                     {
-                        if (thisDWord < 0xE0A00000U) { goto Error; }
-                        if (IsWithinRangeInclusive(thisDWord, 0xEDA00000U, 0xEE790000U)) { goto Error; }
+                        uint comparand = thisDWord & 0x0F200000U;
+                        if ((comparand == 0U) || (comparand == 0x0D200000U)) { goto Error; }
                     }
 
                     inputBufferCurrentOffset += 3;
