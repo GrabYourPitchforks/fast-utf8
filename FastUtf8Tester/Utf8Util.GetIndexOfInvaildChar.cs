@@ -88,13 +88,12 @@ namespace FastUtf8Tester
             // logic. We perform a small test of the first 16 bytes to make sure they're all
             // ASCII before we incur the cost of invoking the vectorized code path.
 
-            if (IntPtr.Size >= 8 && Vector.IsHardwareAccelerated && inputLength >= 2 * sizeof(ulong) + 2 * Vector<byte>.Count)
+            if ((IntPtr.Size >= 8)
+                && Vector.IsHardwareAccelerated
+                && (inputLength >= 2 * sizeof(ulong) + 2 * Vector<byte>.Count)
+                && Utf8QWordAllBytesAreAscii(ReadAndFoldTwoQWords(ref inputBuffer)))
             {
-                ulong thisQWord = Unsafe.ReadUnaligned<ulong>(ref inputBuffer) | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, sizeof(ulong)));
-                if ((thisQWord & 0x8080808080808080UL) == 0UL)
-                {
-                    inputBufferCurrentOffset = (IntPtr)(2 * sizeof(ulong) + GetIndexOfFirstNonAsciiByteVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(ulong)), inputLength - 2 * sizeof(ulong)));
-                }
+                inputBufferCurrentOffset = (IntPtr)(2 * sizeof(ulong) + ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(ulong)), inputLength - 2 * sizeof(ulong)));
             }
 
             IntPtr inputBufferOffsetAtWhichToAllowUnrolling = IntPtr.Zero;
@@ -503,11 +502,12 @@ namespace FastUtf8Tester
             return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
         }
 
-        // This method isn't actually guaranteed to return the real index; it will likely return an index that occurs *before*
-        // the first non-ASCII byte. But that's ok since this method is simply an optimization that should determine how many
-        // bytes can be safely skipped by the byte-to-char counting mechanism.
+        // This method will consume as many ASCII bytes as it can using fast vectorized processing, returning the number of
+        // consumed (ASCII) bytes. It's possible that the method exits early, perhaps because there is some non-ASCII byte
+        // later in the sequence or because we're running out of input to search. The intent is that the caller *skips over*
+        // the number of bytes returned by this method, then it continues data processing from the next byte.
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private unsafe static int GetIndexOfFirstNonAsciiByteVectorized(ref byte buffer, int length)
+        private static unsafe int ConsumeAsciiBytesVectorized(ref byte buffer, int length)
         {
             if (Vector.IsHardwareAccelerated && length >= 2 * Vector<byte>.Count)
             {
@@ -523,7 +523,7 @@ namespace FastUtf8Tester
                 {
                     while (numBytesToConsumeBeforeAligned >= sizeof(ulong))
                     {
-                        if ((Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, numBytesConsumed)) & 0x8080808080808080UL) != 0UL)
+                        if (!Utf8QWordAllBytesAreAscii(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, numBytesConsumed))))
                         {
                             return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
                         }
@@ -533,7 +533,7 @@ namespace FastUtf8Tester
 
                     if (numBytesToConsumeBeforeAligned >= sizeof(uint))
                     {
-                        if ((Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, numBytesConsumed)) & 0x80808080U) != 0U)
+                        if (!Utf8DWordAllBytesAreAscii(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, numBytesConsumed))))
                         {
                             return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
                         }
@@ -545,7 +545,7 @@ namespace FastUtf8Tester
                 {
                     while (numBytesToConsumeBeforeAligned >= sizeof(uint))
                     {
-                        if ((Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, numBytesConsumed)) & 0x80808080U) != 0U)
+                        if (!Utf8DWordAllBytesAreAscii(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, numBytesConsumed))))
                         {
                             return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
                         }
@@ -558,7 +558,7 @@ namespace FastUtf8Tester
 
                 while (numBytesToConsumeBeforeAligned-- != 0)
                 {
-                    if (((uint)Unsafe.Add(ref buffer, numBytesConsumed) & 0x80U) != 0U)
+                    if ((Unsafe.Add(ref buffer, numBytesConsumed) & (byte)0x80U) != (byte)0)
                     {
                         return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set here
                     }

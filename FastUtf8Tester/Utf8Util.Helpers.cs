@@ -336,6 +336,18 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8QWordAllBytesAreAscii(ulong value)
+        {
+            return ((value & 0x8080808080808080UL) == 0UL);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ulong ReadAndFoldTwoQWords(ref byte buffer)
+        {
+            return Unsafe.ReadUnaligned<ulong>(ref buffer) | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, sizeof(ulong)));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordFirstByteIsAscii(uint value)
         {
             // The code in this method is equivalent to the code
