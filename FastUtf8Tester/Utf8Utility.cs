@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Runtime.CompilerServices;
 
 // TODO: Change all of the devdoc to use active tense instead of past tense.
 
@@ -98,14 +99,6 @@ namespace FastUtf8Tester
         /// or -1 if <paramref name="data"/> is a well-formed UTF-8 string.
         /// </summary>
         public static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> data) => Utf8Util.GetIndexOfFirstInvalidByte(data);
-
-        /// <summary>
-        /// Returns the length of the ill-formed UTF-8 sequence at the beginning of an input buffer.
-        /// </summary>
-        /// <remarks>
-        /// Returns 0 if <paramref name="data"/> begins with a well-formed UTF-8 sequence or is empty.
-        /// </remarks>
-        public static int GetLengthOfInvalidSequence(ReadOnlySpan<byte> data) => throw new NotImplementedException();
 
         /// <summary>
         /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127, inclusive).
@@ -312,24 +305,6 @@ namespace FastUtf8Tester
         }
 
         /// <summary>
-        /// If <paramref name="data"/> ends with an incomplete multi-byte UTF-8 sequence, returns <see langword="true"/>
-        /// and populates <paramref name="incompleteByteCount"/> and <paramref name="remainingByteCount"/> with the
-        /// number of bytes present in the incomplete sequence and the number of bytes remaining to complete the
-        /// sequence, respectively. If <paramref name="data"/> does not end with an incomplete multi-byte UTF-8
-        /// sequence, returns <see langword="false"/> and sets both <paramref name="incompleteByteCount"/> and
-        /// <paramref name="remainingByteCount"/> to 0.
-        /// </summary>
-        /// <remarks>
-        /// Consider a string that ends in the byte sequence [ F0 9F 98 ]. These three bytes are not well-formed on
-        /// their own; they're only well-formed as the first part of a four-byte sequence such as [ F0 9F 98 80 ].
-        /// In this case the method will return <see langword="true"/> to indicate that the sequence is incomplete,
-        /// <paramref name="incompleteByteCount"/> will be set to 3 to indicate that there are 3 bytes present in
-        /// the incomplete sequence, and <paramref name="remainingByteCount"/> will be set to 1 to indicate that
-        /// there is 1 byte remaining before the four-byte sequence is complete.
-        /// </remarks>
-        public static bool StringEndsWithIncompleteUtf8Sequence(ReadOnlySpan<byte> data, out int incompleteByteCount, out int remainingByteCount) => throw new NotImplementedException();
-
-        /// <summary>
         /// Attempts to read the first rune (24-bit scalar value) from the provided UTF-8 sequence.
         /// </summary>
         /// <param name="rune">
@@ -344,7 +319,20 @@ namespace FastUtf8Tester
         /// <see langword="true"/> if a scalar value could be decoded from the beginning of the input buffer,
         /// <see langword="false"/> if the input buffer did not begin with a valid UTF-8 sequence.
         /// </returns>
-        public static bool TryReadFirstRune(ReadOnlySpan<byte> inputBuffer, out int rune, out int bytesConsumed) => throw new NotImplementedException();
+        public static bool TryReadFirstRune(ReadOnlySpan<byte> inputBuffer, out int rune, out int bytesConsumed)
+        {
+            if (PeekFirstSequence(inputBuffer, out bytesConsumed, out var scalar) == SequenceValidity.WellFormed)
+            {
+                rune = scalar.Value;
+                return true;
+            }
+
+            // Failure case
+
+            rune = default;
+            bytesConsumed = default;
+            return false;
+        }
 
         /// <summary>
         /// Attempts to read the first rune (24-bit scalar value) from the provided UTF-8 sequence
@@ -354,6 +342,24 @@ namespace FastUtf8Tester
         /// <see langword="true"/> if a scalar value could be decoded from the beginning of the input buffer and could be written to the output buffer,
         /// <see langword="false"/> if the input buffer did not begin with a valid UTF-8 sequence or the output buffer was too small to receive the value.
         /// </returns>
-        public static bool TryReadFirstRuneAsUtf16(ReadOnlySpan<byte> inputBuffer, Span<char> outputBuffer, out int bytesConsumed, out int charsWritten) => throw new NotImplementedException();
+        public static bool TryReadFirstRuneAsUtf16(ReadOnlySpan<byte> inputBuffer, Span<char> outputBuffer, out int bytesConsumed, out int charsWritten)
+        {
+            if (PeekFirstSequence(inputBuffer, out bytesConsumed, out var scalar) == SequenceValidity.WellFormed)
+            {
+                int requiredLength = scalar.Utf16CodeUnitCount;
+                if (outputBuffer.Length >= requiredLength)
+                {
+                    scalar.CopyUtf16CodeUnitsTo(outputBuffer);
+                    charsWritten = requiredLength;
+                    return true;
+                }
+            }
+
+            // Failure case
+
+            bytesConsumed = default;
+            charsWritten = default;
+            return false;
+        }
     }
 }
