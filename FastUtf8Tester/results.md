@@ -97,6 +97,6 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 ### Get UTF16 char count from UTF8
 
 * `System.Text.Encoding.UTF8`: 8.66 sec
-* `Utf8Util.GetCharCount`: 3.47 sec
+* `Utf8Util.GetCharCount`: 2.99 sec
 
-60% reduction in runtime
+65% reduction in runtime

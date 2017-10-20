@@ -344,10 +344,10 @@ namespace FastUtf8Tester
 
                 // Check the 3-byte case.
 
-                BeforeProcessThreeByteSequence:
-
                 if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
                 {
+                    ProcessThreeByteSequenceWithCheck:
+
                     // We need to check for overlong or surrogate three-byte sequences.
                     //
                     // Per Table 3-7, valid sequences are:
@@ -383,28 +383,38 @@ namespace FastUtf8Tester
                     inputBufferRemainingBytes -= 3;
                     tempRuneCount -= 2; // 3 bytes -> 1 rune
 
-                    // Optimization: A three-byte character could indicate CJK text, which makes it likely
-                    // that the character following this one is also CJK. If the leftover byte indicates
-                    // that there's another three-byte sequence coming, try jumping directly to the 3-byte
-                    // validation logic instead of the beginning of the loop.
-
-                    if (Utf8DWordEndsWithThreeByteSequenceMarker(thisDWord) && inputBufferRemainingBytes >= sizeof(uint))
-                    {
-                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                        goto BeforeProcessThreeByteSequence;
-                    }
-
                     // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
                     // in to the text. If this happens strip it off now before seeing if the next character
                     // consists of three code units.
+
                     if (Utf8DWordFourthByteIsAscii(thisDWord))
                     {
                         inputBufferCurrentOffset += 1;
                         inputBufferRemainingBytes--;
-                        goto BeforeReadDWord;
                     }
 
-                    continue; // didn't see a three-byte marker or ASCII value at end of DWORD, go back to start of loop
+                    if (inputBufferRemainingBytes >= sizeof(uint))
+                    {
+                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+
+                        // Optimization: A three-byte character could indicate CJK text, which makes it likely
+                        // that the character following this one is also CJK. We'll check for a three-byte sequence
+                        // marker now and jump directly to three-byte sequence processing if we see one, skipping
+                        // all of the logic at the beginning of the loop.
+
+                        if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
+                        {
+                            goto ProcessThreeByteSequenceWithCheck; // Found another [not yet validated] three-byte sequence; process
+                        }
+                        else
+                        {
+                            goto AfterReadDWord; // Probably ASCI punctuation or whitespace; go back to start of loop
+                        }
+                    }
+                    else
+                    {
+                        goto ProcessRemainingBytesSlow; // Running out of data
+                    }
                 }
 
                 // Check the 4-byte case.
