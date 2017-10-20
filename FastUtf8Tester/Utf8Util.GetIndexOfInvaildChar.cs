@@ -113,6 +113,10 @@ namespace FastUtf8Tester
 
             // Begin the main loop.
 
+#if DEBUG
+            long lastOffsetProcessed = -1; // used for invariant checking in debug builds
+#endif
+
             while (inputBufferRemainingBytes >= sizeof(uint))
             {
                 BeforeReadDWord:
@@ -123,6 +127,11 @@ namespace FastUtf8Tester
                 uint thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
 
                 AfterReadDWord:
+
+#if DEBUG
+                Debug.Assert(lastOffsetProcessed < (long)inputBufferCurrentOffset, "Algorithm should've made forward progress since last read.");
+                lastOffsetProcessed = (long)inputBufferCurrentOffset;
+#endif
 
                 // First, check for the common case of all-ASCII bytes.
 
