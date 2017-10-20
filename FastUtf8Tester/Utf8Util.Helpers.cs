@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Runtime.Intrinsics.X86;
 
 namespace FastUtf8Tester
 {
@@ -164,14 +163,14 @@ namespace FastUtf8Tester
                 // UTF8 [ 11110uuu 10uuzzzz 10yyyyyy 10xxxxxx ] = scalar 000uuuuu zzzzyyyy yyxxxxxx
                 // UTF16 scalar 000uuuuuxxxxxxxxxxxxxxxx = [ 110110wwwwxxxxxx 110111xxxxxxxxx ]
                 // where wwww = uuuuu - 1
-                if (Bmi2.IsSupported)
-                {
-                    uint retVal = Bmi2.ParallelBitDeposit(Bmi2.ParallelBitExtract(utf8, 0x0F3F3F00U), 0x03FF03FFU); // retVal = [ 00000uuuuuzzzzyy 000000yyyyxxxxxx ]
-                    retVal -= 0x4000U; // retVal = [ 000000wwwwzzzzyy 000000yyyyxxxxxx ]
-                    retVal += 0xD800DC00U; // retVal = [ 110110wwwwzzzzyy 110111yyyyxxxxxx ]
-                    return retVal;
-                }
-                else
+                //if (Bmi2.IsSupported)
+                //{
+                //    uint retVal = Bmi2.ParallelBitDeposit(Bmi2.ParallelBitExtract(utf8, 0x0F3F3F00U), 0x03FF03FFU); // retVal = [ 00000uuuuuzzzzyy 000000yyyyxxxxxx ]
+                //    retVal -= 0x4000U; // retVal = [ 000000wwwwzzzzyy 000000yyyyxxxxxx ]
+                //    retVal += 0xD800DC00U; // retVal = [ 110110wwwwzzzzyy 110111yyyyxxxxxx ]
+                //    return retVal;
+                //}
+                //else
                 {
                     uint retVal = utf8 & 0xFF000000U; // retVal = [ 11110uuu 00000000 00000000 00000000 ]
                     retVal |= (utf8 & 0x3F0000U) << 2; // retVal = [ 11110uuu uuzzzz00 00000000 00000000 ]
@@ -373,7 +372,15 @@ namespace FastUtf8Tester
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static ulong ReadAndFoldTwoQWords(ref byte buffer)
         {
-            return Unsafe.ReadUnaligned<ulong>(ref buffer) | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, sizeof(ulong)));
+            return Unsafe.ReadUnaligned<ulong>(ref buffer)
+                | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, sizeof(ulong)));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint ReadAndFoldTwoDWords(ref byte buffer)
+        {
+            return Unsafe.ReadUnaligned<uint>(ref buffer)
+                | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, sizeof(uint)));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -461,11 +468,11 @@ namespace FastUtf8Tester
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe static ulong Widen(uint value)
         {
-            if (Bmi2.IsSupported)
-            {
-                return Bmi2.ParallelBitDeposit((ulong)value, 0x00FF00FF00FF00FFUL);
-            }
-            else
+            //if (Bmi2.IsSupported)
+            //{
+            //    return Bmi2.ParallelBitDeposit((ulong)value, 0x00FF00FF00FF00FFUL);
+            //}
+            //else
             {
                 ulong qWord = value;
                 return ((qWord & 0xFF000000UL) << 24)

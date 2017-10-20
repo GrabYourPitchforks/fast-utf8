@@ -85,15 +85,27 @@ namespace FastUtf8Tester
             int tempSurrogatecount = 0;
 
             // If the sequence is long enough, try running vectorized "is this sequence ASCII?"
-            // logic. We perform a small test of the first 16 bytes to make sure they're all
+            // logic. We perform a small test of the first few bytes to make sure they're all
             // ASCII before we incur the cost of invoking the vectorized code path.
 
-            if ((IntPtr.Size >= 8)
-                && Vector.IsHardwareAccelerated
-                && (inputLength >= 2 * sizeof(ulong) + 2 * Vector<byte>.Count)
-                && Utf8QWordAllBytesAreAscii(ReadAndFoldTwoQWords(ref inputBuffer)))
+            if (Vector.IsHardwareAccelerated)
             {
-                inputBufferCurrentOffset = (IntPtr)(2 * sizeof(ulong) + ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(ulong)), inputLength - 2 * sizeof(ulong)));
+                if (IntPtr.Size >= 8)
+                {
+                    // Test first 16 bytes and check for all-ASCII.
+                    if ((inputLength >= 2 * sizeof(ulong) + 2 * Vector<byte>.Count) && Utf8QWordAllBytesAreAscii(ReadAndFoldTwoQWords(ref inputBuffer)))
+                    {
+                        inputBufferCurrentOffset = (IntPtr)(2 * sizeof(ulong) + ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(ulong)), inputLength - 2 * sizeof(ulong)));
+                    }
+                }
+                else
+                {
+                    // Test first 8 bytes and check for all-ASCII.
+                    if ((inputLength >= 2 * sizeof(uint) + 2 * Vector<byte>.Count) && Utf8DWordAllBytesAreAscii(ReadAndFoldTwoDWords(ref inputBuffer)))
+                    {
+                        inputBufferCurrentOffset = (IntPtr)(2 * sizeof(uint) + ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(uint)), inputLength - 2 * sizeof(uint)));
+                    }
+                }
             }
 
             IntPtr inputBufferOffsetAtWhichToAllowUnrolling = IntPtr.Zero;

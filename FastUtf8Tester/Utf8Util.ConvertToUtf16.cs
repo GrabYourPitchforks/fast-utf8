@@ -2,7 +2,6 @@
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Runtime.Intrinsics.X86;
 
 namespace FastUtf8Tester
 {
@@ -470,11 +469,11 @@ namespace FastUtf8Tester
                     }
                     else
                     {
-                        if (Bmi2.IsSupported)
-                        {
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x0F3F3FU);
-                        }
-                        else
+                        //if (Bmi2.IsSupported)
+                        //{
+                        //    Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)Bmi2.ParallelBitExtract(thisDWord, 0x0F3F3FU);
+                        //}
+                        //else
                         {
                             Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(((thisDWord & 0x0F0000U) >> 4) | ((thisDWord & 0x3F00U) >> 2) | (thisDWord & 0x3FU));
                         }
