@@ -140,7 +140,7 @@ namespace FastUtf8Tester
                                 ulong thisQWord = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset))
                                     | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong)));
 
-                                if ((thisQWord & 0x8080808080808080U) != 0U)
+                                if (!Utf8QWordAllBytesAreAscii(thisQWord))
                                 {
                                     inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + 2 * sizeof(ulong); // non-ASCII data incoming
                                     goto BeforeReadDWord;
@@ -159,7 +159,7 @@ namespace FastUtf8Tester
                                     | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2 * sizeof(uint)))
                                     | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 3 * sizeof(uint)));
 
-                                if ((thisDWord & 0x80808080U) != 0U)
+                                if (!Utf8DWordAllBytesAreAscii(thisDWord))
                                 {
                                     inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + 4 * sizeof(uint); // non-ASCII data incoming
                                     goto BeforeReadDWord;
