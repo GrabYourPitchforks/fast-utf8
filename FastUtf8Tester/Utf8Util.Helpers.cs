@@ -211,6 +211,27 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordBeginsWithFourByteMaskAndHasValidFirstByteLittleEndian(uint value)
+        {
+            // Per Table 3-7, valid 4-byte sequences are:
+            // [   F0   ] [ 90..BF ] [ 80..BF ] [ 80..BF ]
+            // [ F1..F3 ] [ 80..BF ] [ 80..BF ] [ 80..BF ]
+            // [   F4   ] [ 80..8F ] [ 80..BF ] [ 80..BF ]
+            // In little-endian, that would be represented as:
+            // [ 10xxxxxx 10yyyyyy 10zzzzzz 11110www ].
+            // Due to the little-endian representation we can perform a trick by ANDing the value
+            // with the bitmask [ 11000000 11000000 11000000 11111111 ] and checking that the value is within
+            // the range [ 11000000_11000000_11000000_11110000, 11000000_11000000_11000000_11110100 ].
+            // This performs both the 4-byte-sequence bitmask check and validates that the first byte
+            // is within the range [ F0..F4 ], but it doesn't validate the second byte.
+
+            Debug.Assert(BitConverter.IsLittleEndian);
+
+            return (BitConverter.IsLittleEndian && IsWithinRangeInclusive(value & 0xC0C0C0FFU, 0x808080F0U, 0x808080F4U))
+                || (!BitConverter.IsLittleEndian && false); // this line - while weird - helps JITter produce optimal code
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian(uint value)
         {
             // Per Table 3-7, valid 2-byte sequences are [ C2..DF ] [ 80..BF ].

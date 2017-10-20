@@ -432,33 +432,44 @@ namespace FastUtf8Tester
                     }
                 }
 
-                // Check the 4-byte case.
+                // Assume the 4-byte case, but we need to validate.
 
-                if (Utf8DWordBeginsWithFourByteMask(thisDWord))
                 {
+                    // We need to check for overlong or invalid (over U+10FFFF) four-byte sequences.
+                    //
                     // Per Table 3-7, valid sequences are:
                     // [   F0   ] [ 90..BF ] [ 80..BF ] [ 80..BF ]
                     // [ F1..F3 ] [ 80..BF ] [ 80..BF ] [ 80..BF ]
                     // [   F4   ] [ 80..8F ] [ 80..BF ] [ 80..BF ]
 
-                    // Validation: use the second byte to determine what's an allowable first byte
-                    // per the above table.
-
                     if (BitConverter.IsLittleEndian)
                     {
-                        if ((thisDWord & 0xFFFFU) >= 0x9000U)
-                        {
-                            if ((thisDWord & 0xFFU) == 0xF4U) { goto Error; }
-                        }
-                        else
-                        {
-                            if ((thisDWord & 0xFFU) == 0xF0U) { goto Error; }
-                        }
+                        if (!Utf8DWordBeginsWithFourByteMaskAndHasValidFirstByteLittleEndian(thisDWord)) { goto Error; }
+
+                        // At this point, we know the first byte is [ F0..F4 ] and all subsequent bytes are [ 80..BF ].
+
+                        // Consider the first and last bytes in little-endian order, then the allowable ranges are:
+                        // 90F0 = 1001 0000 1111 0000 => invalid (overlong    ) pattern is 1000 #### 1111 0000
+                        // 8FF4 = 1000 1111 1111 0100 => invalid (out of range) pattern is 10@@ #### 1111 01## (where @@ is 01..11)
+                        // If using the bitmask .......................................... 0011 0000 0000 0111 (=3007),
+                        // Then invalid (overlong) patterns match the comparand .......... 0000 0000 0000 0000 (=0000),
+                        // And invalid (out of range) patterns are >= .................... 0001 0000 0000 0100 (=1004).
+
+                        // This allows us to get away with a single comparison, since all we need to do is ensure that
+                        // the value is in the exclusive range (0000, 1004), which is the inclusive range [0001, 1003].
+
+                        if (!IsWithinRangeInclusive(thisDWord & 0x3007U, 0x0001U, 0x1003U)) { goto Error; }
                     }
                     else
                     {
-                        if (!IsWithinRangeInclusive(thisDWord, 0xF0900000U, 0xF48FFFFFU)) { goto Error; }
+                        // Big-endian case: simply need to check the bitmask and that the first and second bytes are within the allowable ranges.
+                        if (!Utf8DWordBeginsWithFourByteMask(thisDWord) || !IsWithinRangeInclusive(thisDWord, 0xF0900000U, 0xF48FFFFFU))
+                        {
+                            goto Error;
+                        }
                     }
+
+                    // Validation complete.
 
                     inputBufferCurrentOffset += 4;
                     inputBufferRemainingBytes -= 4;
@@ -467,10 +478,6 @@ namespace FastUtf8Tester
 
                     continue; // go back to beginning of loop for processing
                 }
-
-                // Error - no match.
-
-                goto Error;
             }
 
             ProcessRemainingBytesSlow:
