@@ -220,18 +220,31 @@ namespace FastUtf8Tester
 
                 BeforeProcessTwoByteSequence:
 
-                if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
+                // On little-endian platforms, we can check for the two-byte UTF8 mask *and* validate that
+                // the value isn't overlong using a single comparison. On big-endian platforms, we'll need
+                // to validate the mask and validate that the sequence isn't overlong as two separate comparisons.
+
+                if ((BitConverter.IsLittleEndian && Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian(thisDWord))
+                    || (!BitConverter.IsLittleEndian && Utf8DWordBeginsWithTwoByteMask(thisDWord)))
                 {
                     // Per Table 3-7, valid sequences are:
                     // [ C2..DF ] [ 80..BF ]
 
-                    if (!IsFirstWordWellFormedTwoByteSequence(thisDWord)) { goto Error; }
+                    if (!BitConverter.IsLittleEndian)
+                    {
+                        // Only need to check for overlong sequences on big-endian platforms.
+                        // Check was already performed for little-endian platforms.
+                        if (!IsFirstWordWellFormedTwoByteSequence(thisDWord)) { goto Error; }
+                    }
+
+                    ProcessTwoByteSequenceSkipValidityChecks:
 
                     // Optimization: If this is a two-byte-per-character language like Cyrillic or Hebrew,
                     // there's a good chance that if we see one two-byte run then there's another two-byte
                     // run immediately after. Let's check that now.
 
-                    if (Utf8DWordEndsWithTwoByteMask(thisDWord) && IsSecondWordWellFormedTwoByteSequence(thisDWord))
+                    if ((BitConverter.IsLittleEndian && Utf8DWordEndsWithValidTwoByteSequenceLittleEndian(thisDWord))
+                        || (!BitConverter.IsLittleEndian && (Utf8DWordEndsWithTwoByteMask(thisDWord) && IsSecondWordWellFormedTwoByteSequence(thisDWord))))
                     {
                         ConsumeTwoAdjacentKnownGoodTwoByteSequences:
 
@@ -246,41 +259,52 @@ namespace FastUtf8Tester
                             // also two bytes. Check for that first before going back to the beginning of the loop.
 
                             thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                            if (Utf8DWordBeginsAndEndsWithTwoByteMask(thisDWord))
+
+                            if (BitConverter.IsLittleEndian)
                             {
-                                if (IsFirstWordWellFormedTwoByteSequence(thisDWord) && IsSecondWordWellFormedTwoByteSequence(thisDWord))
+                                if (Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian(thisDWord))
                                 {
-                                    // Validated next bytes are 2x 2-byte sequences
-                                    goto ConsumeTwoAdjacentKnownGoodTwoByteSequences;
-                                }
-                                else
-                                {
-                                    // Mask said it was 2x 2-byte sequences but validation failed, go to beginning of loop for error handling
-                                    goto AfterReadDWord;
-                                }
-                            }
-                            else if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
-                            {
-                                if (IsFirstWordWellFormedTwoByteSequence(thisDWord))
-                                {
-                                    // Validated next bytes are a single 2-byte sequence with no valid 2-byte sequence following
-                                    goto ConsumeSingleKnownGoodTwoByteSequence;
-                                }
-                                else
-                                {
-                                    // Mask said it was a 2-byte sequence but validation failed, go to beginning of loop for error handling
-                                    goto AfterReadDWord;
+                                    // The next sequence is a valid two-byte sequence.
+                                    goto ProcessTwoByteSequenceSkipValidityChecks;
                                 }
                             }
                             else
                             {
-                                // Next bytes aren't a 2-byte sequence, go to beginning of loop for processing
-                                goto AfterReadDWord;
+                                if (Utf8DWordBeginsAndEndsWithTwoByteMask(thisDWord))
+                                {
+                                    if (IsFirstWordWellFormedTwoByteSequence(thisDWord) && IsSecondWordWellFormedTwoByteSequence(thisDWord))
+                                    {
+                                        // Validated next bytes are 2x 2-byte sequences
+                                        goto ConsumeTwoAdjacentKnownGoodTwoByteSequences;
+                                    }
+                                    else
+                                    {
+                                        // Mask said it was 2x 2-byte sequences but validation failed, go to beginning of loop for error handling
+                                        goto AfterReadDWord;
+                                    }
+                                }
+                                else if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
+                                {
+                                    if (IsFirstWordWellFormedTwoByteSequence(thisDWord))
+                                    {
+                                        // Validated next bytes are a single 2-byte sequence with no valid 2-byte sequence following
+                                        goto ConsumeSingleKnownGoodTwoByteSequence;
+                                    }
+                                    else
+                                    {
+                                        // Mask said it was a 2-byte sequence but validation failed, go to beginning of loop for error handling
+                                        goto AfterReadDWord;
+                                    }
+                                }
                             }
+
+                            // If we reached this point, the next sequence is something other than a valid
+                            // two-byte sequence, so go back to the beginning of the loop.
+                            goto AfterReadDWord;
                         }
                         else
                         {
-                            break; // Running out of data - go down slow path
+                            goto ProcessRemainingBytesSlow; // Running out of data - go down slow path
                         }
                     }
 

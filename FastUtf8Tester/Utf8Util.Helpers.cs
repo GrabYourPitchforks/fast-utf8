@@ -212,6 +212,35 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian(uint value)
+        {
+            // Per Table 3-7, valid 2-byte sequences are [ C2..DF ] [ 80..BF ].
+            // In little-endian, that would be represented as:
+            // [ ######## ######## 10xxxxxx 110yyyyy ].
+            // Due to the little-endian representation we can perform a trick by ANDing the low
+            // WORD with the bitmask [ 11000000 11111111 ] and checking that the value is within
+            // the range [ 11000000_11000010, 11000000_11011111 ]. This performs both the
+            // 2-byte-sequence bitmask check and overlong form validation with one comparison.
+
+            Debug.Assert(BitConverter.IsLittleEndian);
+
+            return (BitConverter.IsLittleEndian && IsWithinRangeInclusive(value & 0xC0FFU, 0x80C2U, 0x80DFU))
+                || (!BitConverter.IsLittleEndian && false); // this line - while weird - helps JITter produce optimal code
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Utf8DWordEndsWithValidTwoByteSequenceLittleEndian(uint value)
+        {
+            // See comment in Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian for how this works.
+            // The only difference is that we use the high WORD instead of the low WORD.
+
+            Debug.Assert(BitConverter.IsLittleEndian);
+
+            return (BitConverter.IsLittleEndian && IsWithinRangeInclusive(value & 0xC0FF0000U, 0x80C20000U, 0x80DF0000U))
+                || (!BitConverter.IsLittleEndian && false); // this line - while weird - helps JITter produce optimal code
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordEndsWithTwoByteMask(uint value)
         {
             // The code in this method is equivalent to the code

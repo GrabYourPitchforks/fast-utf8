@@ -40,9 +40,9 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 ### Get UTF16 char count from UTF8
 
 * `System.Text.Encoding.UTF8`: 5.22 sec
-* `Utf8Util.GetCharCount`: 1.91 sec
+* `Utf8Util.GetCharCount`: 1.81 sec
 
-63% reduction in runtime
+65% reduction in runtime
 
 ## Cyrillic
 
@@ -59,9 +59,9 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 ### Get UTF16 char count from UTF8
 
 * `System.Text.Encoding.UTF8`: 5.20 sec
-* `Utf8Util.GetCharCount`: 1.96 sec
+* `Utf8Util.GetCharCount`: 1.78 sec
 
-62% reduction in runtime
+65% reduction in runtime
 
 ## Japanese
 
