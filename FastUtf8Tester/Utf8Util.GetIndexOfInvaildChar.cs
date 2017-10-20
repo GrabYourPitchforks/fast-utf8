@@ -220,28 +220,22 @@ namespace FastUtf8Tester
 
                 BeforeProcessTwoByteSequence:
 
-                // On little-endian platforms, we can check for the two-byte UTF8 mask *and* validate that
-                // the value isn't overlong using a single comparison. On big-endian platforms, we'll need
-                // to validate the mask and validate that the sequence isn't overlong as two separate comparisons.
-
-                if ((BitConverter.IsLittleEndian && Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian(thisDWord))
-                    || (!BitConverter.IsLittleEndian && Utf8DWordBeginsWithTwoByteMask(thisDWord)))
+                if (Utf8DWordBeginsWithTwoByteMask(thisDWord))
                 {
                     // Per Table 3-7, valid sequences are:
                     // [ C2..DF ] [ 80..BF ]
 
-                    if (!BitConverter.IsLittleEndian)
-                    {
-                        // Only need to check for overlong sequences on big-endian platforms.
-                        // Check was already performed for little-endian platforms.
-                        if (!IsFirstWordWellFormedTwoByteSequence(thisDWord)) { goto Error; }
-                    }
+                    if (!IsFirstWordWellFormedTwoByteSequence(thisDWord)) { goto Error; }
 
-                    ProcessTwoByteSequenceSkipValidityChecks:
+                    ProcessTwoByteSequenceSkipOverlongFormCheck:
 
                     // Optimization: If this is a two-byte-per-character language like Cyrillic or Hebrew,
                     // there's a good chance that if we see one two-byte run then there's another two-byte
                     // run immediately after. Let's check that now.
+
+                    // On little-endian platforms, we can check for the two-byte UTF8 mask *and* validate that
+                    // the value isn't overlong using a single comparison. On big-endian platforms, we'll need
+                    // to validate the mask and validate that the sequence isn't overlong as two separate comparisons.
 
                     if ((BitConverter.IsLittleEndian && Utf8DWordEndsWithValidTwoByteSequenceLittleEndian(thisDWord))
                         || (!BitConverter.IsLittleEndian && (Utf8DWordEndsWithTwoByteMask(thisDWord) && IsSecondWordWellFormedTwoByteSequence(thisDWord))))
@@ -265,7 +259,7 @@ namespace FastUtf8Tester
                                 if (Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian(thisDWord))
                                 {
                                     // The next sequence is a valid two-byte sequence.
-                                    goto ProcessTwoByteSequenceSkipValidityChecks;
+                                    goto ProcessTwoByteSequenceSkipOverlongFormCheck;
                                 }
                             }
                             else
@@ -371,6 +365,11 @@ namespace FastUtf8Tester
 
                     if (BitConverter.IsLittleEndian)
                     {
+                        // The "overlong or surrogate" check can be implemented using a single jump, but there's
+                        // some overhead to moving the bits into the correct locations in order to perform the
+                        // correct comparison, and in practice the processor's branch prediction capability is
+                        // good enough that we shouldn't bother. So we'll use two jumps instead.
+
                         uint comparand = thisDWord & 0x0000200FU;
                         if ((comparand == 0U) || (comparand == 0x0000200DU)) { goto Error; }
                     }
