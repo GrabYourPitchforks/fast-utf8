@@ -382,6 +382,9 @@ namespace FastUtf8Tester
                         // correct comparison, and in practice the processor's branch prediction capability is
                         // good enough that we shouldn't bother. So we'll use two jumps instead.
 
+                        // Can't extract this check into its own helper method because JITter produces suboptimal
+                        // assembly, even with aggressive inlining.
+
                         uint comparand = thisDWord & 0x0000200FU;
                         if ((comparand == 0U) || (comparand == 0x0000200DU)) { goto Error; }
                     }
