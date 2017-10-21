@@ -76,13 +76,13 @@ namespace FastUtf8Tester
             return GetIndexOfFirstInvalidByte(buffer) < 0;
         }
 
-        private static int GetIndexOfFirstInvalidUtf8CharCore(ref byte inputBuffer, int inputLength, out int runeCount, out int surrogateCount)
+        private static int GetIndexOfFirstInvalidUtf8CharCore(ref byte inputBuffer, int inputLength, out int runeCount, out int surrogatePairCount)
         {
             // The fields below control where we read from the buffer.
 
             IntPtr inputBufferCurrentOffset = IntPtr.Zero;
             int tempRuneCount = inputLength;
-            int tempSurrogatecount = 0;
+            int tempSurrogatePairCount = 0;
 
             // If the sequence is long enough, try running vectorized "is this sequence ASCII?"
             // logic. We perform a small test of the first few bytes to make sure they're all
@@ -483,7 +483,7 @@ namespace FastUtf8Tester
                     inputBufferCurrentOffset += 4;
                     inputBufferRemainingBytes -= 4;
                     tempRuneCount -= 3; // 4 bytes -> 1 rune
-                    tempSurrogatecount++; // 4 bytes implies UTF16 surrogate pair
+                    tempSurrogatePairCount++; // 4 bytes implies UTF16 surrogate pair
 
                     continue; // go back to beginning of loop for processing
                 }
@@ -554,7 +554,7 @@ namespace FastUtf8Tester
             // If we reached this point, we're out of data, and we saw no bad UTF8 sequence.
 
             runeCount = tempRuneCount;
-            surrogateCount = tempSurrogatecount;
+            surrogatePairCount = tempSurrogatePairCount;
             return -1;
 
             // Error handling logic.
@@ -562,7 +562,7 @@ namespace FastUtf8Tester
             Error:
 
             runeCount = tempRuneCount - inputBufferRemainingBytes; // we assumed earlier each byte corresponded to a single rune, perform fixup now to account for unread bytes
-            surrogateCount = tempSurrogatecount;
+            surrogatePairCount = tempSurrogatePairCount;
             return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
         }
 
