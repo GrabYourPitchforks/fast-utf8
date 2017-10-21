@@ -158,6 +158,9 @@ namespace FastUtf8Tester
                         {
                             while (inputBufferRemainingBytes >= 2 * sizeof(ulong))
                             {
+                                // Don't use the "read and fold" utility method here since the JITter produces sub-optimal assembly,
+                                // even with forced inlining.
+
                                 ulong thisQWord = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset))
                                     | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong)));
 
@@ -175,6 +178,9 @@ namespace FastUtf8Tester
                         {
                             while (inputBufferRemainingBytes >= 4 * sizeof(uint))
                             {
+                                // Don't use the "read and fold" utility method here since the JITter produces sub-optimal assembly,
+                                // even with forced inlining.
+
                                 thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset))
                                     | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(uint)))
                                     | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2 * sizeof(uint)))
