@@ -579,82 +579,79 @@ namespace FastUtf8Tester
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static unsafe int ConsumeAsciiBytesVectorized(ref byte buffer, int length)
         {
-            if (Vector.IsHardwareAccelerated && length >= 2 * Vector<byte>.Count)
+            // Only allow vectorization if vector operations are hardware-accelerated
+            // and vectors are at least 128 bits in length.
+            if (Vector.IsHardwareAccelerated && (Vector<byte>.Count >= 2 * sizeof(ulong)))
             {
-                IntPtr numBytesConsumed = IntPtr.Zero;
-                int numBytesToConsumeBeforeAligned = (Vector<byte>.Count - ((int)Unsafe.AsPointer(ref buffer) % Vector<byte>.Count)) % Vector<byte>.Count;
-
-                if (length - numBytesToConsumeBeforeAligned < 2 * Vector<byte>.Count)
+                // Need to pin buffer so the GC doesn't cause it to be misaligned when we're
+                // reading vectors from it.
+                fixed (byte* pbBuffer = &buffer)
                 {
-                    return 0; // after alignment, not enough data remaining to justify overhead of setting up vectorized search path
-                }
-
-                if (IntPtr.Size >= sizeof(ulong))
-                {
-                    while (numBytesToConsumeBeforeAligned >= sizeof(ulong))
+                    int offsetAtWhichVectorIsAligned;
                     {
-                        if (!Utf8QWordAllBytesAreAscii(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, numBytesConsumed))))
+                        int referenceMisalignment = (int)pbBuffer % Vector<byte>.Count;
+                        offsetAtWhichVectorIsAligned = (referenceMisalignment == 0) ? 0 : (Vector<byte>.Count - referenceMisalignment);
+                    }
+
+                    if (length - offsetAtWhichVectorIsAligned < (Vector<byte>.Count * 2))
+                    {
+                        // After alignment there's not enough data left over to warrant setting
+                        // up the vectorization code path.
+                        return 0;
+                    }
+
+                    int numBytesConsumed = 0;
+
+                    // Consume QWORDs or DWORDs until we're aligned with where we can start vectorization.
+                    // It's ok if we duplicate a little bit of work by having a single QWORD or DWORD read
+                    // overlap with the vector read area. It's not worth the overhead of checking for this
+                    // condition and avoiding the duplicate work.
+
+                    if (IntPtr.Size >= sizeof(ulong))
+                    {
+                        while (numBytesConsumed < offsetAtWhichVectorIsAligned)
                         {
-                            return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
+                            if (!Utf8QWordAllBytesAreAscii(Unsafe.ReadUnaligned<ulong>(&pbBuffer[numBytesConsumed])))
+                            {
+                                return numBytesConsumed; // found a high bit set somewhere
+                            }
+                            numBytesConsumed += sizeof(ulong);
                         }
-                        numBytesConsumed += sizeof(ulong);
-                        numBytesToConsumeBeforeAligned -= sizeof(ulong);
                     }
-
-                    if (numBytesToConsumeBeforeAligned >= sizeof(uint))
+                    else
                     {
-                        if (!Utf8DWordAllBytesAreAscii(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, numBytesConsumed))))
+                        while (numBytesConsumed < offsetAtWhichVectorIsAligned)
                         {
-                            return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
+                            if (!Utf8DWordAllBytesAreAscii(Unsafe.ReadUnaligned<uint>(&pbBuffer[numBytesConsumed])))
+                            {
+                                return numBytesConsumed; // found a high bit set somewhere
+                            }
+                            numBytesConsumed += sizeof(uint);
                         }
-                        numBytesConsumed += sizeof(uint);
-                        numBytesToConsumeBeforeAligned -= sizeof(uint);
                     }
-                }
-                else
-                {
-                    while (numBytesToConsumeBeforeAligned >= sizeof(uint))
+
+                    // At this point, we're potentially past where we know we can begin a fast
+                    // vectorized search, so let's start from the proper aligned offset.
+
+                    numBytesConsumed = offsetAtWhichVectorIsAligned;
+
+                    var highBitMask = new Vector<byte>(0x80);
+                    do
                     {
-                        if (!Utf8DWordAllBytesAreAscii(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, numBytesConsumed))))
+                        // Read two vector lines at a time.
+
+                        Debug.Assert(length - numBytesConsumed >= 2 * Vector<byte>.Count); // Invariant should've been checked earlier, we need enough room to read data
+
+                        if (((Unsafe.Read<Vector<byte>>(&pbBuffer[numBytesConsumed]) | Unsafe.Read<Vector<byte>>(&pbBuffer[numBytesConsumed + Vector<byte>.Count])) & highBitMask) != Vector<byte>.Zero)
                         {
-                            return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set somewhere
+                            break; // found a non-ascii character somewhere in this vector
                         }
-                        numBytesConsumed += sizeof(uint);
-                        numBytesToConsumeBeforeAligned -= sizeof(uint);
-                    }
+
+                        numBytesConsumed += 2 * Vector<byte>.Count;
+                    } while (length - numBytesConsumed >= 2 * Vector<byte>.Count);
+
+                    return numBytesConsumed;
                 }
-
-                Debug.Assert(numBytesToConsumeBeforeAligned < 4);
-
-                while (numBytesToConsumeBeforeAligned-- != 0)
-                {
-                    if ((Unsafe.Add(ref buffer, numBytesConsumed) & (byte)0x80U) != (byte)0)
-                    {
-                        return IntPtrToInt32NoOverflowCheck(numBytesConsumed); // found a high bit set here
-                    }
-                    numBytesConsumed += 1;
-                }
-
-                // At this point, we're properly aligned to begin a fast vectorized search!
-
-                IntPtr numBytesRemaining = (IntPtr)(length - IntPtrToInt32NoOverflowCheck(numBytesConsumed));
-                Debug.Assert(length - (int)numBytesConsumed > 2 * Vector<byte>.Count); // this invariant was checked at beginning of method
-
-                var highBitMask = new Vector<byte>(0x80);
-
-                do
-                {
-                    // Read two vector lines at a time.
-                    if (((Unsafe.As<byte, Vector<byte>>(ref Unsafe.Add(ref buffer, numBytesConsumed)) | Unsafe.As<byte, Vector<byte>>(ref Unsafe.Add(ref buffer, numBytesConsumed + Vector<byte>.Count))) & highBitMask) != Vector<byte>.Zero)
-                    {
-                        break; // found a non-ascii character somewhere in this vector
-                    }
-
-                    numBytesConsumed += 2 * Vector<byte>.Count;
-                    numBytesRemaining -= 2 * Vector<byte>.Count;
-                } while (IntPtrToInt32NoOverflowCheck(numBytesRemaining) > 2 * Vector<byte>.Count);
-
-                return IntPtrToInt32NoOverflowCheck(numBytesConsumed);
             }
             else
             {
