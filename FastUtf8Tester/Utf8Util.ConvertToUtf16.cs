@@ -7,6 +7,61 @@ namespace FastUtf8Tester
 {
     internal static partial class Utf8Util
     {
+        // This method will convert as many ASCII bytes as possible using vectorized
+        // widening instructions. Returns the total number of bytes / chars converted.
+        // May return 0 if no bytes / chars can be converted. There may also be more
+        // ASCII data remaining in the buffer.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static int ConvertAsciiBytesVectorized(ref byte inputBuffer, int inputBufferLength, ref char outputBuffer, int outputBufferLength)
+        {
+            if (!Vector.IsHardwareAccelerated)
+            {
+                return 0;
+            }
+
+            // First, make sure we can perform at least one vectorized operation.
+
+            int maxIterCount = Math.Min(inputBufferLength, outputBufferLength) / Vector<byte>.Count;
+            if (maxIterCount == 0)
+            {
+                return 0;
+            }
+
+            // Next, calculate the last offset at which we'll be able to perform a
+            // read / write operation without overruning the buffers. Both the read
+            // and write buffers can share a single offset value since we adjust by
+            // the buffer's element width on data access.
+
+            IntPtr currentOffset = IntPtr.Zero;
+            IntPtr finalAllowedOffset = (IntPtr)((maxIterCount - 1) * Vector<byte>.Count);
+
+            Vector<byte> highBitMask = new Vector<byte>((byte)0x80);
+            while (IntPtrIsLessThanOrEqualTo(currentOffset, finalAllowedOffset))
+            {
+                Vector<byte> inputVector = Unsafe.ReadUnaligned<Vector<byte>>(ref Unsafe.Add(ref inputBuffer, currentOffset));
+                if ((inputVector & highBitMask) == Vector<byte>.Zero)
+                {
+                    // Input vector of all-ASCII bytes. Widen and write back to the output.
+                    // Widening operations are endianness-agnostic.
+
+                    // TODO: Vector.Widen is fast than non-vectorized code but still isn't implemented efficiently.
+                    // Ideally this would be implemented via VPMOVZXBW or similar intrinsic for best performance.
+
+                    Vector.Widen(inputVector, out var widenedVectorHigh, out var widenedVectorLow);
+                    Unsafe.WriteUnaligned<Vector<ushort>>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, currentOffset)), widenedVectorHigh);
+                    Unsafe.WriteUnaligned<Vector<ushort>>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, currentOffset + Vector<ushort>.Count)), widenedVectorLow);
+                    currentOffset += Vector<byte>.Count;
+                }
+                else
+                {
+                    // Saw non-ASCII data in the stream; couldn't perform widening operation.
+                    break;
+                }
+            }
+
+            return IntPtrToInt32NoOverflowCheck(currentOffset); // number of bytes successfully converted
+        }
+
         /// <summary>
         /// Consumes an input span in its entirety, returning the number of characters written to the output.
         /// Throws if a conversion error occurs.
@@ -24,16 +79,47 @@ namespace FastUtf8Tester
         // Returns true if conversion succeeded (even if not all bytes could be consumed due to buffer sizes),
         // false if an invalid character was encountered. If error then 'numBytesConsumed' will point to the
         // index of the first invalid byte.
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static bool ConvertUtf8ToUtf16Core(ref byte inputBuffer, int inputLength, ref char outputBuffer, int outputLength, out int numBytesConsumed, out int numCharsWritten)
         {
             // The fields below control where we read from / write to the buffer.
 
+            // If the sequence is long enough, try running vectorized "is this sequence ASCII?"
+            // logic. We perform a small test of the first few bytes to make sure they're all
+            // ASCII before we incur the cost of invoking the vectorized code path.
+
             IntPtr inputBufferCurrentOffset = IntPtr.Zero;
+            if (Vector.IsHardwareAccelerated)
+            {
+                if (IntPtr.Size >= 8)
+                {
+                    // Test first 16 bytes and check for all-ASCII.
+                    if (2 * sizeof(ulong) <= Vector<byte>.Count)
+                    {
+                        if ((Math.Min(inputLength, outputLength) >= 2 * Vector<byte>.Count) && Utf8QWordAllBytesAreAscii(ReadAndFoldTwoQWords(ref inputBuffer)))
+                        {
+                            inputBufferCurrentOffset = (IntPtr)ConvertAsciiBytesVectorized(ref inputBuffer, inputLength, ref outputBuffer, outputLength);
+                        }
+                    }
+                }
+                else
+                {
+                    // Test first 8 bytes and check for all-ASCII.
+                    if (2 * sizeof(uint) <= Vector<byte>.Count)
+                    {
+                        if ((Math.Min(inputLength, outputLength) >= 2 * Vector<byte>.Count) && Utf8DWordAllBytesAreAscii(ReadAndFoldTwoDWords(ref inputBuffer)))
+                        {
+                            inputBufferCurrentOffset = (IntPtr)ConvertAsciiBytesVectorized(ref inputBuffer, inputLength, ref outputBuffer, outputLength);
+                        }
+                    }
+                }
+            }
+
             IntPtr inputBufferOffsetAtWhichToAllowUnrolling = IntPtr.Zero;
             int inputBufferRemainingBytes = inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
 
-            IntPtr outputBufferCurrentOffset = IntPtr.Zero;
-            int remainingOutputBufferSize = outputLength;
+            IntPtr outputBufferCurrentOffset = inputBufferCurrentOffset;
+            int remainingOutputBufferSize = outputLength - IntPtrToInt32NoOverflowCheck(outputBufferCurrentOffset);
 
             // Begin the main loop.
 

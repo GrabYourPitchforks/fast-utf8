@@ -83,6 +83,9 @@ namespace FastUtf8Tester
         private unsafe static bool IntPtrIsLessThan(IntPtr a, IntPtr b) => (a.ToPointer() < b.ToPointer());
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private unsafe static bool IntPtrIsLessThanOrEqualTo(IntPtr a, IntPtr b) => (a.ToPointer() <= b.ToPointer());
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int IntPtrToInt32NoOverflowCheck(IntPtr value)
         {
             if (IntPtr.Size == 4)

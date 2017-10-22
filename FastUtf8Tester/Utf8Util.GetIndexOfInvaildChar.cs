@@ -76,6 +76,7 @@ namespace FastUtf8Tester
             return GetIndexOfFirstInvalidByte(buffer) < 0;
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static int GetIndexOfFirstInvalidUtf8CharCore(ref byte inputBuffer, int inputLength, out int runeCount, out int surrogatePairCount)
         {
             // The fields below control where we read from the buffer.
