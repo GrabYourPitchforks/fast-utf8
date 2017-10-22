@@ -78,10 +78,9 @@ namespace FastUtf8Tester
                                 var inputVector = Unsafe.ReadUnaligned<Vector<byte>>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
                                 if ((inputVector & highBitMaskVector) == Vector<byte>.Zero)
                                 {
-                                    // TODO: Is it ok for this to be unaligned without explicit use of 'unaligned' keyword?
-                                    Vector.Widen(inputVector,
-                                        dest1: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
-                                        dest2: out Unsafe.As<char, Vector<ushort>>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + Vector<ushort>.Count)));
+                                    Vector.Widen(inputVector, out var widenedHigh, out var widenedLow);
+                                    Unsafe.WriteUnaligned<Vector<ushort>>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), widenedHigh);
+                                    Unsafe.WriteUnaligned<Vector<ushort>>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + Vector<short>.Count)), widenedLow);
 
                                     inputBufferCurrentOffset += Vector<byte>.Count;
                                     inputBufferRemainingBytes -= Vector<byte>.Count;
