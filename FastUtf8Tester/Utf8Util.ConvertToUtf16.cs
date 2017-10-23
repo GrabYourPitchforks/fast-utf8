@@ -89,7 +89,7 @@ namespace FastUtf8Tester
             // ASCII before we incur the cost of invoking the vectorized code path.
 
             IntPtr inputBufferCurrentOffset = IntPtr.Zero;
-            if (false)
+            if (Vector.IsHardwareAccelerated)
             {
                 if (IntPtr.Size >= 8)
                 {
