@@ -502,6 +502,8 @@ namespace FastUtf8Tester
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WritePackedQWordAsChars(ref char chars, ulong value)
         {
+            // TODO: BMI support
+
             if (BitConverter.IsLittleEndian)
             {
                 chars = (char)(byte)value; value >>= 8;
@@ -529,6 +531,8 @@ namespace FastUtf8Tester
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WritePackedDWordAsChars(ref char chars, uint value)
         {
+            // TODO: BMI support
+
             if (BitConverter.IsLittleEndian)
             {
                 chars = (char)(byte)value; value >>= 8;
@@ -544,52 +548,7 @@ namespace FastUtf8Tester
                 chars = (char)value;
             }
         }
-
-        private unsafe static ulong WidenHighDWord(ulong value)
-        {
-            ulong rv = (byte)(value >> 32);
-            ((byte*)(&rv))[5] = (byte)(value >> 40);
-            ((byte*)(&rv))[3] = (byte)(value >> 48);
-            ((byte*)(&rv))[1] = (byte)(value >> 56);
-            return rv;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe static ulong WidenHighDWord2(ulong value)
-        {
-            return ((value & 0xFF00000000000000UL) >> 8)
-                | ((value & 0xFF000000000000UL) >> 16)
-                | ((value & 0xFF0000000000UL) >> 24)
-                | ((value & 0xFF00000000UL) >> 32);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe static ulong WidenLowDWord(ulong value)
-        {
-            return ((value & 0xFF000000UL) << 24)
-                | ((value & 0xFF0000UL) << 16)
-                | (((value & 0xFF00UL) << 8)
-                | (byte)value);
-        }
-
-        // Widens a 32-bit DWORD to a 64-bit QWORD by placing bytes into alternating slots.
-        // [ AA BB CC DD ] -> [ 00 AA 00 BB 00 CC 00 DD ]
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe static ulong Widen(uint value)
-        {
-            //if (Bmi2.IsSupported)
-            //{
-            //    return Bmi2.ParallelBitDeposit((ulong)value, 0x00FF00FF00FF00FFUL);
-            //}
-            //else
-            {
-                ulong qWord = value;
-                return ((qWord & 0xFF000000UL) << 24)
-                    | ((qWord & 0xFF0000UL) << 16)
-                    | (((value & 0xFF00U) << 8) | (byte)value);
-            }
-        }
-
+        
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsWellFormedCharPackFromDoubleTwoByteSequences(uint value)
         {
