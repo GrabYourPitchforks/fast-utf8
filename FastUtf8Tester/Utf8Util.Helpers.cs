@@ -500,7 +500,62 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WritePackedQWordAsChars(ref char chars, ulong value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                chars = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 4) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 5) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 6) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 7) = (char)value;
+            }
+            else
+            {
+                Unsafe.Add(ref chars, 7) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 6) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 5) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 4) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
+                chars = (char)value;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WritePackedDWordAsChars(ref char chars, uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                chars = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 3) = (char)value;
+            }
+            else
+            {
+                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
+                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
+                chars = (char)value;
+            }
+        }
+
         private unsafe static ulong WidenHighDWord(ulong value)
+        {
+            ulong rv = (byte)(value >> 32);
+            ((byte*)(&rv))[5] = (byte)(value >> 40);
+            ((byte*)(&rv))[3] = (byte)(value >> 48);
+            ((byte*)(&rv))[1] = (byte)(value >> 56);
+            return rv;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private unsafe static ulong WidenHighDWord2(ulong value)
         {
             return ((value & 0xFF00000000000000UL) >> 8)
                 | ((value & 0xFF000000000000UL) >> 16)

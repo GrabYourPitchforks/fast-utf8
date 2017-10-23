@@ -163,7 +163,7 @@ namespace FastUtf8Tester
 
                     if (remainingOutputBufferSize < sizeof(uint)) { goto ProcessRemainingBytesSlow; } // running out of space, but may be able to write some data
 
-                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), Widen(thisDWord));
+                    WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisDWord);
                     inputBufferCurrentOffset += 4;
                     inputBufferRemainingBytes -= 4;
                     outputBufferCurrentOffset += 4;
@@ -185,33 +185,25 @@ namespace FastUtf8Tester
                         }
                         else
                         {
-                            while (inputBufferRemainingBytes >= sizeof(ulong) && remainingOutputBufferSize >= sizeof(ulong))
+                            int iterCount = Math.Min(inputBufferRemainingBytes, remainingOutputBufferSize) / (2 * sizeof(ulong));
+                            while (iterCount-- != 0)
                             {
-                                ulong thisQWord = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-
-                                if (!Utf8QWordAllBytesAreAscii(thisQWord))
+                                ulong thisQWord1 = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                                ulong thisQWord2 = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong)));
+                                if (!Utf8QWordAllBytesAreAscii(thisQWord1 | thisQWord2))
                                 {
-                                    inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + sizeof(ulong); // non-ASCII data incoming
-                                    goto BeforeReadDWord;
+                                    inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset; // non-ASCII data incoming
+                                    thisDWord = (uint)thisQWord1;
+                                    goto AfterReadDWord;
                                 }
 
-                                // We read an all-ASCII sequence. Split the incoming QWORD into two widened QWORDs and write back.
+                                WritePackedQWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisQWord1);
+                                WritePackedQWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + sizeof(ulong)), thisQWord2);
 
-                                if (BitConverter.IsLittleEndian)
-                                {
-                                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), WidenLowDWord(thisQWord));
-                                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + sizeof(ulong) / sizeof(char))), WidenHighDWord(thisQWord));
-                                }
-                                else
-                                {
-                                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), WidenHighDWord(thisQWord));
-                                    Unsafe.WriteUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + sizeof(ulong) / sizeof(char))), WidenLowDWord(thisQWord));
-                                }
-
-                                inputBufferCurrentOffset += 8;
-                                inputBufferRemainingBytes -= 8;
-                                outputBufferCurrentOffset += 8;
-                                remainingOutputBufferSize -= 8;
+                                inputBufferCurrentOffset += 2 * sizeof(ulong);
+                                inputBufferRemainingBytes -= 2 * sizeof(ulong);
+                                outputBufferCurrentOffset += 2 * sizeof(ulong);
+                                remainingOutputBufferSize -= 2 * sizeof(ulong);
                             }
                         }
                     }
