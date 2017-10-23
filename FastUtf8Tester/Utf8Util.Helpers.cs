@@ -214,6 +214,18 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool EitherInt32IsNegative(int a, int b)
+        {
+            return ((a | b) < 0);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool BothValuesAreNonNegative(int a, int b)
+        {
+            return !EitherInt32IsNegative(a, b);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordBeginsWithFourByteMaskAndHasValidFirstByteLittleEndian(uint value)
         {
             // Per Table 3-7, valid 4-byte sequences are:
@@ -485,6 +497,22 @@ namespace FastUtf8Tester
 
             return (BitConverter.IsLittleEndian && ((int)value >= 0))
                 || (!BitConverter.IsLittleEndian && ((value & 0x80U) == 0U));
+        }
+
+        private unsafe static ulong WidenHighDWord(ulong value)
+        {
+            return ((value & 0xFF00000000000000UL) << 24)
+                | ((value & 0xFF000000000000UL) << 16)
+                | ((value & 0xFF0000000000UL) << 8)
+                | (value & 0xFF00000000UL);
+        }
+
+        private unsafe static ulong WidenLowDWord(ulong value)
+        {
+            return ((value & 0xFF000000UL) << 24)
+                | ((value & 0xFF0000UL) << 16)
+                | (((value & 0xFF00UL) << 8)
+                | (byte)value);
         }
 
         // Widens a 32-bit DWORD to a 64-bit QWORD by placing bytes into alternating slots.
