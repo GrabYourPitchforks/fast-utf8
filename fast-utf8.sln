@@ -1,9 +1,11 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 15
-VisualStudioVersion = 15.0.26927.1
+VisualStudioVersion = 15.0.27019.1
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FastUtf8Tester", "FastUtf8Tester\FastUtf8Tester.csproj", "{4143EFC2-4A33-4D4F-8F77-CA1ED453C273}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "FastUtf8Tester", "FastUtf8Tester\FastUtf8Tester.csproj", "{4143EFC2-4A33-4D4F-8F77-CA1ED453C273}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Tests", "Tests\Tests.csproj", "{81689DED-CC53-45E4-A945-ACB4E3CC1E22}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,6 +17,10 @@ Global
 		{4143EFC2-4A33-4D4F-8F77-CA1ED453C273}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4143EFC2-4A33-4D4F-8F77-CA1ED453C273}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4143EFC2-4A33-4D4F-8F77-CA1ED453C273}.Release|Any CPU.Build.0 = Release|Any CPU
+		{81689DED-CC53-45E4-A945-ACB4E3CC1E22}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{81689DED-CC53-45E4-A945-ACB4E3CC1E22}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{81689DED-CC53-45E4-A945-ACB4E3CC1E22}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{81689DED-CC53-45E4-A945-ACB4E3CC1E22}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
