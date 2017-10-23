@@ -172,19 +172,19 @@ namespace FastUtf8Tester
                     // If we saw a sequence of all ASCII, there's a good chance a significant amount of following data is also ASCII.
                     // Below is basically unrolled loops with poor man's vectorization.
 
-                    if (IntPtr.Size >= 8)
+                    if (IntPtrIsLessThan(inputBufferCurrentOffset, inputBufferOffsetAtWhichToAllowUnrolling))
                     {
-                        // Only go down QWORD-unrolled path in 64-bit procs.
+                        // We saw non-ASCII data last time we tried loop unrolling, so don't bother going
+                        // down the unrolling path again until we've bypassed that data. No need to perform
+                        // a bounds check here since we already checked the bounds as part of the loop unrolling path.
+                        goto BeforeReadDWord;
+                    }
+                    else
+                    {
+                        if (IntPtr.Size >= 8)
+                        {
+                            // Try converting 16 ASCII bytes to chars at a time.
 
-                        if (IntPtrIsLessThan(inputBufferCurrentOffset, inputBufferOffsetAtWhichToAllowUnrolling))
-                        {
-                            // We saw non-ASCII data last time we tried loop unrolling, so don't bother going
-                            // down the unrolling path again until we've bypassed that data. No need to perform
-                            // a bounds check here since we already checked the bounds as part of the loop unrolling path.
-                            goto BeforeReadDWord;
-                        }
-                        else
-                        {
                             int iterCount = Math.Min(inputBufferRemainingBytes, remainingOutputBufferSize) / (2 * sizeof(ulong));
                             while (iterCount-- != 0)
                             {
@@ -204,6 +204,31 @@ namespace FastUtf8Tester
                                 inputBufferRemainingBytes -= 2 * sizeof(ulong);
                                 outputBufferCurrentOffset += 2 * sizeof(ulong);
                                 remainingOutputBufferSize -= 2 * sizeof(ulong);
+                            }
+                        }
+                        else
+                        {
+                            // Try converting 8 ASCII bytes to chars at a time.
+
+                            int iterCount = Math.Min(inputBufferRemainingBytes, remainingOutputBufferSize) / (2 * sizeof(uint));
+                            while (iterCount-- != 0)
+                            {
+                                uint thisDWord1 = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                                uint thisDWord2 = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(uint)));
+                                if (!Utf8QWordAllBytesAreAscii(thisDWord1 | thisDWord2))
+                                {
+                                    inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset; // non-ASCII data incoming
+                                    thisDWord = (uint)thisDWord1;
+                                    goto AfterReadDWord;
+                                }
+
+                                WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisDWord1);
+                                WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + sizeof(ulong)), thisDWord2);
+
+                                inputBufferCurrentOffset += 2 * sizeof(uint);
+                                inputBufferRemainingBytes -= 2 * sizeof(uint);
+                                outputBufferCurrentOffset += 2 * sizeof(uint);
+                                remainingOutputBufferSize -= 2 * sizeof(uint);
                             }
                         }
                     }
