@@ -542,13 +542,9 @@ namespace FastUtf8Tester
                         // 3-byte sequence + ASCII byte
                         if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; }
 
-                        // thisDWord = [ 0xxxxxxx | 10xxxxxx 10yyyyyy 1110zzzz ]
+                        uint toWrite = ExtractTwoCharsPackedFromThreeByteSequenceFollowedByAsciiByte(thisDWord);
+                        Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), toWrite);
 
-                        uint toWrite = ((thisDWord & 0x003F0000U) >> 16)
-                            | ((thisDWord & 0x00003F00U) >> 2)
-                            | ((thisDWord & 0x0000000FU) << 12)
-                            | ((thisDWord & 0xFF000000U) >> 8);
-                        Unsafe.WriteUnaligned(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), toWrite);
                         inputBufferCurrentOffset += 4;
                         inputBufferRemainingBytes -= 4;
                         outputBufferCurrentOffset += 2;
@@ -559,11 +555,7 @@ namespace FastUtf8Tester
                         // 3-byte sequence, no trailing ASCII byte
                         if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
 
-                        // thisDWord = [ 0xxxxxxx | 10xxxxxx 10yyyyyy 1110zzzz ]
-
-                        uint toWrite = ((thisDWord & 0x003F0000U) >> 16)
-                            | ((thisDWord & 0x00003F00U) >> 2)
-                            | ((thisDWord & 0x0000000FU) << 12);
+                        char toWrite = ExtractCharFromFirstThreeByteSequence(thisDWord);
                         Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)toWrite;
                         inputBufferCurrentOffset += 3;
                         inputBufferRemainingBytes -= 3;

@@ -166,26 +166,17 @@ namespace FastUtf8Tester
                 // UTF8 [ 11110uuu 10uuzzzz 10yyyyyy 10xxxxxx ] = scalar 000uuuuu zzzzyyyy yyxxxxxx
                 // UTF16 scalar 000uuuuuxxxxxxxxxxxxxxxx = [ 110110wwwwxxxxxx 110111xxxxxxxxx ]
                 // where wwww = uuuuu - 1
-                //if (Bmi2.IsSupported)
-                //{
-                //    uint retVal = Bmi2.ParallelBitDeposit(Bmi2.ParallelBitExtract(utf8, 0x0F3F3F00U), 0x03FF03FFU); // retVal = [ 00000uuuuuzzzzyy 000000yyyyxxxxxx ]
-                //    retVal -= 0x4000U; // retVal = [ 000000wwwwzzzzyy 000000yyyyxxxxxx ]
-                //    retVal += 0xD800DC00U; // retVal = [ 110110wwwwzzzzyy 110111yyyyxxxxxx ]
-                //    return retVal;
-                //}
-                //else
-                {
-                    uint retVal = utf8 & 0xFF000000U; // retVal = [ 11110uuu 00000000 00000000 00000000 ]
-                    retVal |= (utf8 & 0x3F0000U) << 2; // retVal = [ 11110uuu uuzzzz00 00000000 00000000 ]
-                    retVal |= (utf8 & 0x3000U) << 4; // retVal = [ 11110uuu uuzzzzyy 00000000 00000000 ]
-                    retVal |= (utf8 & 0x0F00U) >> 2; // retVal = [ 11110uuu uuzzzzyy 000000yy yy000000 ]
-                    retVal |= (utf8 & 0x3FU); // retVal = [ 11110uuu uuzzzzyy 000000yy yyxxxxxx ]
-                    retVal -= 0x20000000U; // retVal = [ 11010uuu uuzzzzyy 000000yy yyxxxxxx ]
-                    retVal -= 0x400000U; // retVal = [ 110100ww wwzzzzyy 000000yy yyxxxxxx ]
-                    retVal += 0xDC00U; // retVal = [ 110100ww wwzzzzyy 110111yy yyxxxxxx ]
-                    retVal += 0x08000000U; // retVal = [ 110110ww wwzzzzyy 110111yy yyxxxxxx ]
-                    return retVal;
-                }
+                // TODO: BMI support
+                uint retVal = utf8 & 0xFF000000U; // retVal = [ 11110uuu 00000000 00000000 00000000 ]
+                retVal |= (utf8 & 0x3F0000U) << 2; // retVal = [ 11110uuu uuzzzz00 00000000 00000000 ]
+                retVal |= (utf8 & 0x3000U) << 4; // retVal = [ 11110uuu uuzzzzyy 00000000 00000000 ]
+                retVal |= (utf8 & 0x0F00U) >> 2; // retVal = [ 11110uuu uuzzzzyy 000000yy yy000000 ]
+                retVal |= (utf8 & 0x3FU); // retVal = [ 11110uuu uuzzzzyy 000000yy yyxxxxxx ]
+                retVal -= 0x20000000U; // retVal = [ 11010uuu uuzzzzyy 000000yy yyxxxxxx ]
+                retVal -= 0x400000U; // retVal = [ 110100ww wwzzzzyy 000000yy yyxxxxxx ]
+                retVal += 0xDC00U; // retVal = [ 110100ww wwzzzzyy 110111yy yyxxxxxx ]
+                retVal += 0x08000000U; // retVal = [ 110110ww wwzzzzyy 110111yy yyxxxxxx ]
+                return retVal;
             }
         }
 
@@ -527,6 +518,50 @@ namespace FastUtf8Tester
                 Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
                 Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
                 chars = (char)value;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static char ExtractCharFromFirstThreeByteSequence(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                // value = [ ######## | 10xxxxxx 10yyyyyy 1110zzzz ]
+                // TODO: BSWAP and BMI support
+                return (char)(((value & 0x003F0000U) >> 16)
+                    | ((value & 0x00003F00U) >> 2)
+                    | ((value & 0x0000000FU) << 12));
+            }
+            else
+            {
+                // value = [ 1110zzzz 10yyyyyy 10xxxxxx | ######## ]
+                // TODO: BMI support
+                return (char)(((value & 0x0F000000U) >> 12)
+                    | ((value & 0x003F0000U) >> 10)
+                    | ((value & 0x00003F00U) >> 8));
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint ExtractTwoCharsPackedFromThreeByteSequenceFollowedByAsciiByte(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                // value = [ 0xxxxxxx | 10xxxxxx 10yyyyyy 1110zzzz ]
+                // TODO: BSWAP and BMI support
+                return ((value & 0x003F0000U) >> 16)
+                    | ((value & 0x00003F00U) >> 2)
+                    | ((value & 0x0000000FU) << 12)
+                    | ((value & 0x7F000000U) >> 8);
+            }
+            else
+            {
+                // value = [ 1110zzzz 10yyyyyy 10xxxxxx | 0xxxxxxx ]
+                // TODO: BMI support
+                return ((value & 0x0F000000U) << 4)
+                    | ((value & 0x003F0000U) << 6)
+                    | ((value & 0x00003F00U) << 8)
+                    | (byte)value;
             }
         }
 
