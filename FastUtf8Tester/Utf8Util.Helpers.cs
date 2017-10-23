@@ -499,6 +499,8 @@ namespace FastUtf8Tester
                 || (!BitConverter.IsLittleEndian && ((value & 0x80U) == 0U));
         }
 
+        // Widens a QWORD which represents a buffer of 8 BYTEs into 8 WORDs and writes them
+        // to an output buffer with machine endianness.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WritePackedQWordAsChars(ref char chars, ulong value)
         {
@@ -529,6 +531,45 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static char ExtractCharFromFirstTwoByteSequence(uint value)
+        {
+            if (BitConverter.IsLittleEndian)
+            {
+                // value = [ ######## ######## | 10xxxxxx 110yyyyy ]
+                // TODO: BSWAP and BMI support
+                return (char)(((value & 0x3F00U) >> 8) | ((value & 0x001FU) << 6));
+            }
+            else
+            {
+                // value = [ 110yyyyy 10xxxxxx | ######## ######## ]
+                // TODO: BMI support
+                return (char)(((value & 0x1F000000U) >> 18) | ((value & 0x003F0000U) >> 16));
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint ExtractTwoCharsPackedFromTwoAdjacentTwoByteSequences(uint value)
+        {
+            // We don't want to swap the position of the high and low WORDs,
+            // as the buffer was read in machine order and will be written in
+            // machine order.
+
+            if (BitConverter.IsLittleEndian)
+            {
+                // value = [ 10xxxxxx 110yyyyy | 10xxxxxx 110yyyyy ]
+                return ((value & 0x3F003F00U) >> 8) | ((value & 0x001F001FU) << 6);
+            }
+            else
+            {
+                // value = [ 110yyyyy 10xxxxxx | 110yyyyy 10xxxxxx ]
+                // TODO: BMI support
+                return ((value & 0x1F001F00U) >> 2) | (value & 0x003F003FU);
+            }
+        }
+
+        // Widens a DWORD which represents a buffer of 4 BYTEs into 4 WORDs and writes them
+        // to an output buffer with machine endianness.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WritePackedDWordAsChars(ref char chars, uint value)
         {
             // TODO: BMI support
@@ -548,7 +589,7 @@ namespace FastUtf8Tester
                 chars = (char)value;
             }
         }
-        
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsWellFormedCharPackFromDoubleTwoByteSequences(uint value)
         {

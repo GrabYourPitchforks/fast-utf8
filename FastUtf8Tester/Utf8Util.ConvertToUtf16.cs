@@ -123,18 +123,6 @@ namespace FastUtf8Tester
 
             // Begin the main loop.
 
-            // For the duration of the loop, we're going to fudge the input and output "remaining length"
-            // size by 4 and 2, respectively. This is because we only want the central processing loop
-            // to run if we can both read a DWORD from the input buffer *and* write a DWORD to the output
-            // buffer. This would normally require two comparisons, but we can use the fact that the
-            // two's complement representation of a negative number sets the high bit, so we can OR these
-            // two DWORDs together, and if the output has the high bit set, the at least one of the inputs
-            // was negative. This allows us to get away with a single OR and a single JL rather than two
-            // CMP and JB instructions.
-
-            //inputBufferRemainingBytes -= 400000;
-            //remainingOutputBufferSize -= 2;
-
 #if DEBUG
             long lastOffsetProcessed = -1; // used for invariant checking in debug builds
 #endif
@@ -243,14 +231,28 @@ namespace FastUtf8Tester
                 {
                     if (Utf8DWordSecondByteIsAscii(thisDWord))
                     {
+                        // Optimization: compute the base offset now to avoid multiple 'LEA' instructions later.
+                        ref char tempOutputBuffer = ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset);
+
                         if (Utf8DWordThirdByteIsAscii(thisDWord))
                         {
                             // Want to copy three characters to output buffer
                             if (remainingOutputBufferSize < 3) { goto ProcessRemainingBytesSlow; }
 
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(byte)thisDWord;
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)(byte)(thisDWord >> 8);
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 2) = (char)(byte)(thisDWord >> 16);
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                tempOutputBuffer = (char)(byte)thisDWord; thisDWord >>= 8;
+                                Unsafe.Add(ref tempOutputBuffer, 1) = (char)(byte)thisDWord; thisDWord >>= 8;
+                                Unsafe.Add(ref tempOutputBuffer, 2) = (char)(byte)thisDWord;
+                            }
+                            else
+                            {
+                                thisDWord >>= 8;
+                                Unsafe.Add(ref tempOutputBuffer, 2) = (char)(byte)thisDWord; thisDWord >>= 8;
+                                Unsafe.Add(ref tempOutputBuffer, 1) = (char)(byte)thisDWord; thisDWord >>= 8;
+                                Debug.Assert(thisDWord <= 0xFFU, "All bytes higher than the least signficant byte should've been shifted out.");
+                                tempOutputBuffer = (char)thisDWord;
+                            }
 
                             inputBufferCurrentOffset += 3;
                             inputBufferRemainingBytes -= 3;
@@ -261,8 +263,18 @@ namespace FastUtf8Tester
                         {
                             if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; }
 
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(byte)thisDWord;
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)(byte)(thisDWord >> 8);
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                tempOutputBuffer = (char)(byte)thisDWord; thisDWord >>= 8;
+                                Unsafe.Add(ref tempOutputBuffer, 1) = (char)(byte)thisDWord;
+                            }
+                            else
+                            {
+                                thisDWord >>= 16;
+                                Unsafe.Add(ref tempOutputBuffer, 1) = (char)(byte)thisDWord; thisDWord >>= 8;
+                                Debug.Assert(thisDWord <= 0xFFU, "All bytes higher than the least signficant byte should've been shifted out.");
+                                tempOutputBuffer = (char)thisDWord;
+                            }
 
                             inputBufferCurrentOffset += 2;
                             inputBufferRemainingBytes -= 2;
@@ -274,7 +286,14 @@ namespace FastUtf8Tester
                     {
                         if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
 
-                        Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(byte)thisDWord;
+                        if (BitConverter.IsLittleEndian)
+                        {
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(byte)thisDWord;
+                        }
+                        else
+                        {
+                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)(thisDWord >> 24);
+                        }
 
                         inputBufferCurrentOffset += 1;
                         inputBufferRemainingBytes -= 1;
@@ -330,11 +349,9 @@ namespace FastUtf8Tester
 
                         if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; } // running out of output buffer
 
-                        // thisDWord = [ 10xxxxxx 110yyyyy 10xxxxxx 110yyyyy ]
-
-                        uint toWrite = ((thisDWord & 0x3F003F00U) >> 8)
-                            | ((thisDWord & 0x001F001FU) << 6);
-                        Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), toWrite);
+                        Unsafe.WriteUnaligned<uint>(
+                            ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
+                            ExtractTwoCharsPackedFromTwoAdjacentTwoByteSequences(thisDWord));
 
                         inputBufferCurrentOffset += 4;
                         inputBufferRemainingBytes -= 4;
@@ -404,16 +421,26 @@ namespace FastUtf8Tester
 
                     if (Utf8DWordThirdByteIsAscii(thisDWord))
                     {
+                        // Calculate the reference ahead of time to prevent multiple 'LEA' instructions
+                        ref char tempOutputBuffer = ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset);
+
                         if (Utf8DWordFourthByteIsAscii(thisDWord))
                         {
                             // 2-byte sequence + 2 ASCII bytes
                             if (remainingOutputBufferSize < 3) { goto ProcessRemainingBytesSlow; } // running out of room
 
-                            uint toWrite = ((thisDWord & 0x3F00U) >> 8)
-                                | ((thisDWord & 0x1FU) << 6);
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)toWrite;
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)(byte)(thisDWord >> 16);
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 2) = (char)(thisDWord >> 24);
+                            tempOutputBuffer = ExtractCharFromFirstTwoByteSequence(thisDWord);
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                thisDWord >>= 16;
+                                Unsafe.Add(ref tempOutputBuffer, 1) = (char)(byte)thisDWord; thisDWord >>= 8;
+                                Unsafe.Add(ref tempOutputBuffer, 2) = (char)thisDWord;
+                            }
+                            else
+                            {
+                                Unsafe.Add(ref tempOutputBuffer, 2) = (char)(byte)thisDWord; thisDWord >>= 8;
+                                Unsafe.Add(ref tempOutputBuffer, 1) = (char)(byte)thisDWord;
+                            }
 
                             inputBufferCurrentOffset += 4;
                             inputBufferRemainingBytes -= 4;
@@ -425,10 +452,16 @@ namespace FastUtf8Tester
                             // 2-byte sequence + 1 ASCII byte
                             if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; } // running out of room
 
-                            uint toWrite = ((thisDWord & 0x3F00U) >> 8)
-                                | ((thisDWord & 0x1FU) << 6);
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)toWrite;
-                            Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)(byte)(thisDWord >> 16);
+                            tempOutputBuffer = ExtractCharFromFirstTwoByteSequence(thisDWord);
+                            if (BitConverter.IsLittleEndian)
+                            {
+                                thisDWord >>= 16;
+                                Unsafe.Add(ref tempOutputBuffer, 1) = (char)(byte)thisDWord;
+                            }
+                            else
+                            {
+                                Unsafe.Add(ref tempOutputBuffer, 1) = (char)(byte)(thisDWord >> 8);
+                            }
 
                             inputBufferCurrentOffset += 3;
                             inputBufferRemainingBytes -= 3;
@@ -449,9 +482,7 @@ namespace FastUtf8Tester
                     {
                         if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; } // running out of room
 
-                        uint toWrite = ((thisDWord & 0x3F00U) >> 8)
-                            | ((thisDWord & 0x1FU) << 5);
-                        Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)toWrite;
+                        Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = ExtractCharFromFirstTwoByteSequence(thisDWord);
 
                         inputBufferCurrentOffset += 2;
                         inputBufferRemainingBytes -= 2;
