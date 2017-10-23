@@ -499,14 +499,16 @@ namespace FastUtf8Tester
                 || (!BitConverter.IsLittleEndian && ((value & 0x80U) == 0U));
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe static ulong WidenHighDWord(ulong value)
         {
-            return ((value & 0xFF00000000000000UL) << 24)
-                | ((value & 0xFF000000000000UL) << 16)
-                | ((value & 0xFF0000000000UL) << 8)
-                | (value & 0xFF00000000UL);
+            return ((value & 0xFF00000000000000UL) >> 8)
+                | ((value & 0xFF000000000000UL) >> 16)
+                | ((value & 0xFF0000000000UL) >> 24)
+                | ((value & 0xFF00000000UL) >> 32);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe static ulong WidenLowDWord(ulong value)
         {
             return ((value & 0xFF000000UL) << 24)

@@ -209,8 +209,8 @@ namespace FastUtf8Tester
                                 }
 
                                 inputBufferCurrentOffset += 8;
-                                inputBufferRemainingBytes += 8;
-                                outputBufferCurrentOffset -= 8;
+                                inputBufferRemainingBytes -= 8;
+                                outputBufferCurrentOffset += 8;
                                 remainingOutputBufferSize -= 8;
                             }
                         }
@@ -316,7 +316,7 @@ namespace FastUtf8Tester
                         // thisDWord = [ 10xxxxxx 110yyyyy 10xxxxxx 110yyyyy ]
 
                         uint toWrite = ((thisDWord & 0x3F003F00U) >> 8)
-                            | ((thisDWord & 0x001F001FU) << 5);
+                            | ((thisDWord & 0x001F001FU) << 6);
                         Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), toWrite);
 
                         inputBufferCurrentOffset += 4;
@@ -393,7 +393,7 @@ namespace FastUtf8Tester
                             if (remainingOutputBufferSize < 3) { goto ProcessRemainingBytesSlow; } // running out of room
 
                             uint toWrite = ((thisDWord & 0x3F00U) >> 8)
-                                | ((thisDWord & 0x1FU) << 5);
+                                | ((thisDWord & 0x1FU) << 6);
                             Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)toWrite;
                             Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)(byte)(thisDWord >> 16);
                             Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 2) = (char)(thisDWord >> 24);
@@ -409,7 +409,7 @@ namespace FastUtf8Tester
                             if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; } // running out of room
 
                             uint toWrite = ((thisDWord & 0x3F00U) >> 8)
-                                | ((thisDWord & 0x1FU) << 5);
+                                | ((thisDWord & 0x1FU) << 6);
                             Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)toWrite;
                             Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + 1) = (char)(byte)(thisDWord >> 16);
 
@@ -703,7 +703,7 @@ namespace FastUtf8Tester
                 // There are still some weird edge cases here that we don't handle. For example, consider an
                 // input stream that ends with [ E0 80 ]. We won't report it as an error, but we also won't
                 // consume it because we'll tell the caller that we're waiting for the final byte of the
-                // sequence. But per Table 3-7 any 3-byte sequence that reads [ E0 80 ##] is *always* invalid.
+                // sequence. But per Table 3-7 any 3-byte sequence that reads [ E0 80 ## ] is *always* invalid.
                 // A properly-implemented caller will still be able to detect the error eventually.
 
                 if (((firstByte & 0xE0U) == 0xC0U) && (inputBufferRemainingBytes < 2)) { goto InputBufferTooSmall; } // 2-byte marker but not enough input data
