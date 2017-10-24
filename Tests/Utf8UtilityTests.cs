@@ -1,6 +1,8 @@
-using FastUtf8Tester;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
+using FastUtf8Tester;
 using Xunit;
 
 namespace Tests
@@ -8,6 +10,9 @@ namespace Tests
     public class Utf8UtilityTests
     {
         private static readonly UTF8Encoding _utf8EncodingWithoutReplacement = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+        // All valid scalars [ U+0000 .. U+D7FF ] and [ U+E000 .. U+10FFFF ].
+        private static readonly IEnumerable<int> _allValidScalars = Enumerable.Range(0x0000, 0xD800).Concat(Enumerable.Range(0xE000, 0x110000 - 0xE000));
 
         [Fact]
         public void GetExpectedNumberOfContinuationBytes_ForAllInputs()
@@ -167,24 +172,17 @@ namespace Tests
         [Fact]
         public void PeekFirstSequence_WithValidNonZeroInput_ReturnsProperRepresentation()
         {
-            // Loop over all inputs before the surrogate range
-            for (uint i = 0; i < 0xD800U; i++)
+            foreach (var scalar in _allValidScalars)
             {
-                PeekFirstSequence_WithValidNonZeroInput_ReturnsProperRepresentation_Core(i);
-            }
-
-            // Loop over all inputs after the surrogate range
-            for (uint i = 0xE000U; i <= 0x10FFFFU; i++)
-            {
-                PeekFirstSequence_WithValidNonZeroInput_ReturnsProperRepresentation_Core(i);
+                PeekFirstSequence_WithValidNonZeroInput_ReturnsProperRepresentation_Core(scalar);
             }
         }
 
-        private void PeekFirstSequence_WithValidNonZeroInput_ReturnsProperRepresentation_Core(uint scalar)
+        private void PeekFirstSequence_WithValidNonZeroInput_ReturnsProperRepresentation_Core(int scalar)
         {
             // Arrange
 
-            string asUtf16String = Char.ConvertFromUtf32((int)scalar);
+            string asUtf16String = Char.ConvertFromUtf32(scalar);
             byte[] asUtf8Bytes = _utf8EncodingWithoutReplacement.GetBytes(asUtf16String);
 
             // Act & assert 1 - with no trailing data
@@ -193,7 +191,7 @@ namespace Tests
 
             Assert.Equal(SequenceValidity.WellFormed, validity);
             Assert.Equal(asUtf8Bytes.Length, numBytesConsumed);
-            Assert.Equal(scalar, (uint)scalarValue.Value);
+            Assert.Equal(scalar, scalarValue.Value);
 
             // Act & assert 2 - with trailing data
 
@@ -205,7 +203,63 @@ namespace Tests
 
             Assert.Equal(SequenceValidity.WellFormed, validity);
             Assert.Equal(asUtf8Bytes.Length, numBytesConsumed);
-            Assert.Equal(scalar, (uint)scalarValue.Value);
+            Assert.Equal(scalar, scalarValue.Value);
+        }
+
+        [Fact]
+        public void TryReadFirstRune_WithValidInput_ReturnsScalarValue()
+        {
+            foreach (var scalar in _allValidScalars)
+            {
+                TryReadFirstRune_WithValidInput_ReturnsScalarValue_Core(scalar);
+            }
+        }
+
+        private void TryReadFirstRune_WithValidInput_ReturnsScalarValue_Core(int scalarValue)
+        {
+            // Arrange
+
+            string asUtf16String = Char.ConvertFromUtf32(scalarValue);
+            byte[] asUtf8Bytes = _utf8EncodingWithoutReplacement.GetBytes(asUtf16String);
+
+            // Act
+
+            bool retVal = Utf8Utility.TryReadFirstRune(asUtf8Bytes, out var rune, out var bytesConsumed);
+
+            // Assert
+
+            Assert.True(retVal);
+            Assert.Equal(scalarValue, rune);
+            Assert.Equal(asUtf8Bytes.Length, bytesConsumed);
+        }
+
+        [Fact]
+        public void TryReadFirstRuneAsUtf16_WithValidInput_ReturnsScalarValue()
+        {
+            foreach (var scalar in _allValidScalars)
+            {
+                TryReadFirstRuneAsUtf16_WithValidInput_ReturnsScalarValue_Core(scalar);
+            }
+        }
+
+        private void TryReadFirstRuneAsUtf16_WithValidInput_ReturnsScalarValue_Core(int scalarValue)
+        {
+            // Arrange
+
+            string asUtf16String = Char.ConvertFromUtf32(scalarValue);
+            byte[] asUtf8Bytes = _utf8EncodingWithoutReplacement.GetBytes(asUtf16String);
+            var chars = new char[2];
+
+            // Act
+
+            bool retVal = Utf8Utility.TryReadFirstRuneAsUtf16(asUtf8Bytes, chars, out var bytesConsumed, out var charsWritten);
+
+            // Assert
+
+            Assert.True(retVal);
+            Assert.Equal(asUtf16String, new string(chars, 0, charsWritten));
+            Assert.Equal(asUtf16String.Length, charsWritten);
+            Assert.Equal(asUtf8Bytes.Length, bytesConsumed);
         }
 
         private static readonly Lazy<string> _stringWithAllScalars = new Lazy<string>(CreateStringWithAllScalars);
