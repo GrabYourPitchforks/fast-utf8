@@ -470,11 +470,11 @@ namespace FastUtf8Tester
                         // can detect a ROR / ROL operation, then we'll just zero out the bytes that
                         // aren't involved in the range check.
 
-                        uint toCheck = (thisDWord << 24) | (thisDWord >> 8); // ROR 8 / ROL 24
+                        uint toCheck = (ushort)thisDWord;
 
-                        // At this point, toCheck = [ 11110www 10xxxxxx 10yyyyyy 10zzzzzz ].
+                        // At this point, toCheck = [ 00000000 00000000 10zzzzzz 11110www ].
 
-                        toCheck &= 0xFF0000FFU;
+                        toCheck = (toCheck << 24) | (toCheck >> 8); // ROR 8 / ROL 24
 
                         // At this point, toCheck = [ 11110www 00000000 00000000 10zzzzzz ].
 
