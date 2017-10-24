@@ -15,17 +15,19 @@ namespace Tests
         [InlineData(new byte[] { 0x80, 0x80 }, 1)] // [ 80 ] can never appear at start of sequence, 1 invalid byte
         [InlineData(new byte[] { 0xC0, 0x80 }, 1)] // [ C0 ] is always invalid, 1 invalid byte
         [InlineData(new byte[] { 0xC1, 0x80 }, 1)] // [ C1 ] is always invalid, 1 invalid byte
-        [InlineData(new byte[] { 0xC2, 0x00 }, 1)] // [ C2 ] is invalid if not followed by continuation byte, 1 invalid byte
+        [InlineData(new byte[] { 0xC2, 0xC2 }, 1)] // [ C2 ] is improperly terminated sequence, 1 invalid byte
         [InlineData(new byte[] { 0xE0, 0x00, 0x80 }, 1)] // [ E0 ] is invalid if not followed by continuation byte, 1 invalid byte
         [InlineData(new byte[] { 0xE0, 0x80 }, 2)] // [ E0 80 ] is overlong sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xE0, 0x80, 0x80 }, 2)] // [ E0 80 ] is overlong sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xE0, 0x9F }, 2)] // [ E0 9F ] is overlong sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xE0, 0x9F, 0x80 }, 2)] // [ E0 9F ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xE0, 0xA0, 0xC2 }, 2)] // [ E0 A0 ] is improperly terminated sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xED, 0xA0 }, 2)] // [ ED A0 ] is overlong sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xED, 0xA0, 0x80 }, 2)] // [ ED A0 ] is overlong sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xF0, 0x80 }, 2)] // [ F0 80 ] is overlong sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xF0, 0x80, 0x80 }, 2)] // [ F0 80 ] is overlong sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xF0, 0x80, 0x80, 0x80 }, 2)] // [ F0 80 ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xF0, 0x90, 0x80, 0xC2 }, 3)] // [ F0 90 80 ] is improperly terminated sequence, 3 invalid bytes
         [InlineData(new byte[] { 0xF4, 0x90 }, 2)] // [ F4 90 ] is out-of-range sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xF4, 0x90, 0x80 }, 2)] // [ F4 90 ] is out-of-range sequence, 2 invalid bytes
         [InlineData(new byte[] { 0xF4, 0x90, 0x80, 0x80 }, 2)] // [ F4 90 ] is out-of-range sequence, 2 invalid bytes
@@ -47,6 +49,34 @@ namespace Tests
 
             Assert.Equal(SequenceValidity.Invalid, validity);
             Assert.Equal(invalidSequenceLength, numBytesConsumed);
+            Assert.Equal(UnicodeScalar.ReplacementChar, scalarValue);
+        }
+
+        [Theory]
+        [InlineData(new byte[] { 0xC2 })]
+        [InlineData(new byte[] { 0xDF })]
+        [InlineData(new byte[] { 0xE0 })]
+        [InlineData(new byte[] { 0xE0, 0xA0 })]
+        [InlineData(new byte[] { 0xE0, 0xBF })]
+        [InlineData(new byte[] { 0xED })]
+        [InlineData(new byte[] { 0xED, 0x80 })]
+        [InlineData(new byte[] { 0xED, 0x9F })]
+        [InlineData(new byte[] { 0xF0 })]
+        [InlineData(new byte[] { 0xF0, 0x90 })]
+        [InlineData(new byte[] { 0xF0, 0x90, 0x80 })]
+        [InlineData(new byte[] { 0xF4 })]
+        [InlineData(new byte[] { 0xF4, 0x8F })]
+        [InlineData(new byte[] { 0xF4, 0x8F, 0x80 })]
+        public void PeekFirstSequence_WithIncompleteSequence_ReturnsIncomplete(byte[] sequence)
+        {
+            // Act
+
+            var validity = Utf8Utility.PeekFirstSequence(sequence, out var numBytesConsumed, out var scalarValue);
+
+            // Assert
+
+            Assert.Equal(SequenceValidity.Incomplete, validity);
+            Assert.Equal(sequence.Length, numBytesConsumed);
             Assert.Equal(UnicodeScalar.ReplacementChar, scalarValue);
         }
 
