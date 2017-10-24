@@ -13,13 +13,13 @@ namespace FastUtf8Tester
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetIndexOfFirstInvalidByte(ReadOnlySpan<byte> utf8)
         {
-            return GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out _, out _);
+            return GetIndexOfFirstInvalidUtf8Sequence(ref utf8.DangerousGetPinnableReference(), utf8.Length, out _, out _);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetRuneCount(ReadOnlySpan<byte> utf8)
         {
-            return (GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out _) < 0)
+            return (GetIndexOfFirstInvalidUtf8Sequence(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out _) < 0)
                 ? runeCount
                 : throw new ArgumentException(
                     message: "Invalid data.",
@@ -29,7 +29,7 @@ namespace FastUtf8Tester
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetUtf16CharCount(ReadOnlySpan<byte> utf8, DecoderFallback fallback = null)
         {
-            int offsetOfInvalidData = GetIndexOfFirstInvalidUtf8CharCore(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out int surrogateCount);
+            int offsetOfInvalidData = GetIndexOfFirstInvalidUtf8Sequence(ref utf8.DangerousGetPinnableReference(), utf8.Length, out int runeCount, out int surrogateCount);
             int utf16CharsCount = runeCount + surrogateCount;
             if (offsetOfInvalidData >= 0)
             {
@@ -55,7 +55,7 @@ namespace FastUtf8Tester
                 }
 
                 sequenceThatBeginsWithInvalidData = sequenceThatBeginsWithInvalidData.Slice(numInvalidBytes);
-                int newOffset = GetIndexOfFirstInvalidUtf8CharCore(ref sequenceThatBeginsWithInvalidData.DangerousGetPinnableReference(), sequenceThatBeginsWithInvalidData.Length, out int runeCount, out int surrogateCount);
+                int newOffset = GetIndexOfFirstInvalidUtf8Sequence(ref sequenceThatBeginsWithInvalidData.DangerousGetPinnableReference(), sequenceThatBeginsWithInvalidData.Length, out int runeCount, out int surrogateCount);
                 int numUtf16CharsSeenThisLoop = runeCount + surrogateCount; // will never overflow
                 checked { utf16CharCount += numUtf16CharsSeenThisLoop; }
 
@@ -77,7 +77,7 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int GetIndexOfFirstInvalidUtf8CharCore(ref byte inputBuffer, int inputLength, out int runeCount, out int surrogatePairCount)
+        internal static int GetIndexOfFirstInvalidUtf8Sequence(ref byte inputBuffer, int inputLength, out int runeCount, out int surrogatePairCount)
         {
             // The fields below control where we read from the buffer.
 
