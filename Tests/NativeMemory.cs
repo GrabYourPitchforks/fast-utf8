@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace FastUtf8Tester
+namespace Tests
 {
     /// <summary>
     /// Contains factory methods to create <see cref="INativeMemory"/> instances.

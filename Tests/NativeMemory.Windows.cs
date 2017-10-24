@@ -3,7 +3,7 @@ using System.Runtime.ConstrainedExecution;
 using System.Runtime.InteropServices;
 using System.Security;
 
-namespace FastUtf8Tester
+namespace Tests
 {
     public static partial class NativeMemory
     {

@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace FastUtf8Tester
+namespace Tests
 {
     public static partial class NativeMemory
     {

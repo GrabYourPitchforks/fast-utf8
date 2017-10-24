@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace FastUtf8Tester
+namespace Tests
 {
     /// <summary>
     /// Dictates where the poison page should be placed.

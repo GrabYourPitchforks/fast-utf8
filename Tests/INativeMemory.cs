@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace FastUtf8Tester
+namespace Tests
 {
     /// <summary>
     /// Represents a region of native memory. The <see cref="Span"/> property can be used
