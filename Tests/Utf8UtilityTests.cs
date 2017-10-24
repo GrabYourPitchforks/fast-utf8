@@ -10,6 +10,52 @@ namespace Tests
     {
         private static readonly UTF8Encoding _utf8EncodingWithoutReplacement = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
+        [Fact]
+        public void GetExpectedNumberOfContinuationBytes_ForAllInputs()
+        {
+            // For [ 00..7F ], ASCII characters
+            for (uint i = 0x00; i <= 0x7F; i++)
+            {
+                Assert.Equal(0, Utf8Utility.GetExpectedNumberOfContinuationBytes((byte)i));
+            }
+
+            // For [ 80..BF ], continuation code units (never valid start bytes)
+            for (uint i = 0x80; i <= 0xBF; i++)
+            {
+                Assert.Equal(0, Utf8Utility.GetExpectedNumberOfContinuationBytes((byte)i));
+            }
+
+            // For [ C0..C1 ], overlong 2-byte starting code units (never valid bytes)
+            for (uint i = 0x80; i <= 0xBF; i++)
+            {
+                Assert.Equal(0, Utf8Utility.GetExpectedNumberOfContinuationBytes((byte)i));
+            }
+
+            // For [ C2..DF ], 2-byte sequence starting markers
+            for (uint i = 0xC2; i <= 0xDF; i++)
+            {
+                Assert.Equal(1, Utf8Utility.GetExpectedNumberOfContinuationBytes((byte)i));
+            }
+
+            // For [ E0..EF ], 3-byte sequence starting markers
+            for (uint i = 0xE0; i <= 0xEF; i++)
+            {
+                Assert.Equal(2, Utf8Utility.GetExpectedNumberOfContinuationBytes((byte)i));
+            }
+
+            // For [ F0..F4 ], 4-byte sequence starting markers
+            for (uint i = 0xF0; i <= 0xF4; i++)
+            {
+                Assert.Equal(3, Utf8Utility.GetExpectedNumberOfContinuationBytes((byte)i));
+            }
+
+            // For [ F5..FF ], never valid UTF-8 code units
+            for (uint i = 0xF5; i <= 0xFF; i++)
+            {
+                Assert.Equal(0, Utf8Utility.GetExpectedNumberOfContinuationBytes((byte)i));
+            }
+        }
+
         [Theory]
         [InlineData(new byte[] { 0x80 }, 1)] // [ 80 ] can never appear at start of sequence, 1 invalid byte
         [InlineData(new byte[] { 0x80, 0x80 }, 1)] // [ 80 ] can never appear at start of sequence, 1 invalid byte
