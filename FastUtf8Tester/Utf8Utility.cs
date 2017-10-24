@@ -27,7 +27,33 @@ namespace FastUtf8Tester
         /// If <paramref name="data"/> is not a well-formed UTF-8 string, returns a byte array which represents the well-formed UTF-8 string
         /// resulting from replacing all invalid sequences in the input data with the Unicode Replacement Character (U+FFFD).
         /// </summary>
-        public static byte[] ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(ReadOnlySpan<byte> data, bool suppressStringCreationOnValidInput) => throw new NotImplementedException();
+        public static byte[] ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(ReadOnlySpan<byte> data, bool suppressStringCreationOnValidInput)
+        {
+            int indexOfFirstInvalidSequence = GetIndexOfFirstInvalidUtf8Sequence(data);
+            if (indexOfFirstInvalidSequence < 0)
+            {
+                // Entire sequence was valid; return original data or null depending on flags
+                return (suppressStringCreationOnValidInput) ? null : data.ToArray();
+            }
+
+            // If we reached this point, we know there was invalid data in the buffer.
+            // Figure out how much room we need for fixing up the remainder, then perform fixup.
+
+            var dataRemainder = data.Slice(indexOfFirstInvalidSequence);
+            var byteCountForFixedUpRemainder = GetCountOfTotalBytesAfterInvalidSequenceReplacement(dataRemainder);
+
+            // We can memcpy the first part of the data (up to where the first invalid sequence was)
+            // into the output since we know it doesn't require any fixup.
+
+            byte[] retVal = new byte[checked(indexOfFirstInvalidSequence + byteCountForFixedUpRemainder)];
+            data.CopyTo(retVal);
+
+            Span<byte> retValRemainder = new Span<byte>(retVal).Slice(indexOfFirstInvalidSequence);
+            int numBytesConverted = ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(dataRemainder, retValRemainder);
+            Debug.Assert(numBytesConverted == retValRemainder.Length);
+
+            return retVal;
+        }
 
         /// <summary>
         /// If <paramref name="inputBuffer"/> is a well-formed UTF-8 string, copies <paramref name="inputBuffer"/> to <paramref name="outputBuffer"/> unmodified.
@@ -39,7 +65,36 @@ namespace FastUtf8Tester
         /// The caller must allocate an output buffer large enough to hold the resulting UTF-8 string.
         /// This length can be determined by calling the <see cref="GetCountOfTotalBytesAfterInvalidSequenceReplacement(ReadOnlySpan{byte})"/> method.
         /// </remarks>
-        public static int ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(ReadOnlySpan<byte> inputBuffer, Span<byte> outputBuffer) => throw new NotImplementedException();
+        public static int ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(ReadOnlySpan<byte> inputBuffer, Span<byte> outputBuffer)
+        {
+            int originalOutputBufferLength = outputBuffer.Length;
+            while (true)
+            {
+                int indexOfFirstInvalidSequence = GetIndexOfFirstInvalidUtf8Sequence(inputBuffer);
+                if (indexOfFirstInvalidSequence < 0)
+                {
+                    break; // all remaining data is good
+                }
+
+                // Copy all data up to (but not including) the first invalid sequence into
+                // the output buffer, then copy a replacement char into the output buffer,
+                // then skip over the invalid data and loop again.
+
+                inputBuffer.Slice(0, indexOfFirstInvalidSequence).CopyTo(outputBuffer);
+                inputBuffer = inputBuffer.Slice(indexOfFirstInvalidSequence);
+                var validity = PeekFirstSequence(inputBuffer, out var invalidSequenceLength, out _);
+                Debug.Assert((validity == SequenceValidity.Incomplete) || (validity == SequenceValidity.Invalid));
+                inputBuffer = inputBuffer.Slice(invalidSequenceLength);
+
+                outputBuffer = outputBuffer.Slice(indexOfFirstInvalidSequence);
+                ReplacementCharacterByteSequence.CopyTo(outputBuffer);
+                outputBuffer = outputBuffer.Slice(ReplacementCharacterByteSequence.Length);
+            }
+
+            // The number of bytes written is going to be the difference between the original
+            // output buffer length and the remaining (unused) output buffer length.
+            return originalOutputBufferLength - outputBuffer.Length;
+        }
 
         /// <summary>
         /// If <paramref name="data"/> is an ill-formed UTF-8 string, returns the number of bytes required to hold the resulting
