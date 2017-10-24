@@ -66,10 +66,14 @@ namespace Tests
             // Arrange
 
             byte[] allScalarsAsUtf8 = _utf8EncodingWithoutReplacement.GetBytes(_stringWithAllScalars.Value);
+            var buffer = NativeMemory.AllocateFromExistingData(allScalarsAsUtf8, PoisonPagePlacement.AfterSpan);
+            buffer.MakeReadonly();
 
             // Act & assert
 
-            Assert.True(Utf8Utility.IsWellFormedUtf8String(allScalarsAsUtf8));
+            Assert.True(Utf8Utility.IsWellFormedUtf8String(buffer.Span));
+
+            buffer.Dispose();
         }
 
         [Fact]
@@ -79,10 +83,14 @@ namespace Tests
 
             byte[] allScalarsAsUtf8 = _utf8EncodingWithoutReplacement.GetBytes(_stringWithAllScalars.Value);
             allScalarsAsUtf8[0x1000] ^= 0x80; // modify the high bit of one of the characters, which will corrupt the header
+            var buffer = NativeMemory.AllocateFromExistingData(allScalarsAsUtf8, PoisonPagePlacement.AfterSpan);
+            buffer.MakeReadonly();
 
             // Act & assert
 
-            Assert.False(Utf8Utility.IsWellFormedUtf8String(allScalarsAsUtf8));
+            Assert.False(Utf8Utility.IsWellFormedUtf8String(buffer.Span));
+
+            buffer.Dispose();
         }
 
         [Theory]
@@ -118,7 +126,8 @@ namespace Tests
         {
             // Act
 
-            var validity = Utf8Utility.PeekFirstSequence(sequence, out var numBytesConsumed, out var scalarValue);
+            var asUtf8Bytes = NativeMemory.GetProtectedReadonlyBuffer(sequence);
+            var validity = Utf8Utility.PeekFirstSequence(asUtf8Bytes, out var numBytesConsumed, out var scalarValue);
 
             // Assert
 
@@ -146,7 +155,8 @@ namespace Tests
         {
             // Act
 
-            var validity = Utf8Utility.PeekFirstSequence(sequence, out var numBytesConsumed, out var scalarValue);
+            var asUtf8Bytes = NativeMemory.GetProtectedReadonlyBuffer(sequence);
+            var validity = Utf8Utility.PeekFirstSequence(asUtf8Bytes, out var numBytesConsumed, out var scalarValue);
 
             // Assert
 
@@ -160,13 +170,16 @@ namespace Tests
         {
             // Act
 
-            var validity = Utf8Utility.PeekFirstSequence(ReadOnlySpan<byte>.Empty, out var numBytesConsumed, out var scalarValue);
+            var buffer = NativeMemory.Allocate(0, PoisonPagePlacement.AfterSpan);
+            var validity = Utf8Utility.PeekFirstSequence(buffer.Span, out var numBytesConsumed, out var scalarValue);
 
             // Assert
 
             Assert.Equal(SequenceValidity.Empty, validity);
             Assert.Equal(0, numBytesConsumed);
             Assert.Equal(UnicodeScalar.ReplacementChar, scalarValue);
+
+            buffer.Dispose();
         }
 
         [Fact]
@@ -183,7 +196,7 @@ namespace Tests
             // Arrange
 
             string asUtf16String = Char.ConvertFromUtf32(scalar);
-            byte[] asUtf8Bytes = _utf8EncodingWithoutReplacement.GetBytes(asUtf16String);
+            var asUtf8Bytes = NativeMemory.GetProtectedReadonlyBuffer(_utf8EncodingWithoutReplacement.GetBytes(asUtf16String));
 
             // Act & assert 1 - with no trailing data
 
@@ -199,7 +212,7 @@ namespace Tests
             asUtf8Bytes.CopyTo(asUtf8BytesWithExtra);
             asUtf8BytesWithExtra[asUtf8BytesWithExtra.Length - 1] = 0xFF; // end with an always-invalid byte
 
-            validity = Utf8Utility.PeekFirstSequence(asUtf8BytesWithExtra, out numBytesConsumed, out scalarValue);
+            validity = Utf8Utility.PeekFirstSequence(NativeMemory.GetProtectedReadonlyBuffer(asUtf8BytesWithExtra), out numBytesConsumed, out scalarValue);
 
             Assert.Equal(SequenceValidity.WellFormed, validity);
             Assert.Equal(asUtf8Bytes.Length, numBytesConsumed);
@@ -220,7 +233,7 @@ namespace Tests
             // Arrange
 
             string asUtf16String = Char.ConvertFromUtf32(scalarValue);
-            byte[] asUtf8Bytes = _utf8EncodingWithoutReplacement.GetBytes(asUtf16String);
+            var asUtf8Bytes = NativeMemory.GetProtectedReadonlyBuffer(_utf8EncodingWithoutReplacement.GetBytes(asUtf16String));
 
             // Act
 
@@ -247,8 +260,8 @@ namespace Tests
             // Arrange
 
             string asUtf16String = Char.ConvertFromUtf32(scalarValue);
-            byte[] asUtf8Bytes = _utf8EncodingWithoutReplacement.GetBytes(asUtf16String);
-            var chars = new char[2];
+            var asUtf8Bytes = NativeMemory.GetProtectedReadonlyBuffer(_utf8EncodingWithoutReplacement.GetBytes(asUtf16String));
+            var chars = NativeMemory.GetProtectedWriteableCharBuffer(2);
 
             // Act
 
@@ -257,7 +270,7 @@ namespace Tests
             // Assert
 
             Assert.True(retVal);
-            Assert.Equal(asUtf16String, new string(chars, 0, charsWritten));
+            Assert.Equal(asUtf16String, new String(chars.ToArray(), 0, charsWritten));
             Assert.Equal(asUtf16String.Length, charsWritten);
             Assert.Equal(asUtf8Bytes.Length, bytesConsumed);
         }
