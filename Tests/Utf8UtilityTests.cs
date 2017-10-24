@@ -1,7 +1,6 @@
 using FastUtf8Tester;
 using System;
 using System.Text;
-using System.Linq;
 using Xunit;
 
 namespace Tests
@@ -54,6 +53,31 @@ namespace Tests
             {
                 Assert.Equal(0, Utf8Utility.GetExpectedNumberOfContinuationBytes((byte)i));
             }
+        }
+
+        [Fact]
+        public void IsWellFormedUtf8String_WithStringOfAllPossibleScalarValues_ReturnsTrue()
+        {
+            // Arrange
+
+            byte[] allScalarsAsUtf8 = _utf8EncodingWithoutReplacement.GetBytes(_stringWithAllScalars.Value);
+
+            // Act & assert
+
+            Assert.True(Utf8Utility.IsWellFormedUtf8String(allScalarsAsUtf8));
+        }
+
+        [Fact]
+        public void IsWellFormedUtf8String_WithCorruptedStringOfAllPossibleScalarValues_ReturnsFalse()
+        {
+            // Arrange
+
+            byte[] allScalarsAsUtf8 = _utf8EncodingWithoutReplacement.GetBytes(_stringWithAllScalars.Value);
+            allScalarsAsUtf8[0x1000] ^= 0x80; // modify the high bit of one of the characters, which will corrupt the header
+
+            // Act & assert
+
+            Assert.False(Utf8Utility.IsWellFormedUtf8String(allScalarsAsUtf8));
         }
 
         [Theory]
@@ -182,6 +206,27 @@ namespace Tests
             Assert.Equal(SequenceValidity.WellFormed, validity);
             Assert.Equal(asUtf8Bytes.Length, numBytesConsumed);
             Assert.Equal(scalar, (uint)scalarValue.Value);
+        }
+
+        private static readonly Lazy<string> _stringWithAllScalars = new Lazy<string>(CreateStringWithAllScalars);
+
+        private static string CreateStringWithAllScalars()
+        {
+            StringBuilder sb = new StringBuilder();
+
+            // Everything before the surrogate range
+            for (int i = 0; i < 0xD800; i++)
+            {
+                sb.Append(Char.ConvertFromUtf32(i));
+            }
+
+            // Everything after the surrogate range
+            for (int i = 0xE000; i <= 0x10FFFF; i++)
+            {
+                sb.Append(Char.ConvertFromUtf32(i));
+            }
+
+            return sb.ToString();
         }
     }
 }

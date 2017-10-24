@@ -458,31 +458,31 @@ namespace FastUtf8Tester
                     // [ F1..F3 ] [ 80..BF ] [ 80..BF ] [ 80..BF ]
                     // [   F4   ] [ 80..8F ] [ 80..BF ] [ 80..BF ]
 
+                    if (!Utf8DWordBeginsWithFourByteMask(thisDWord)) { goto Error; }
+
+                    // Now check for overlong / out-of-range sequences.
+
                     if (BitConverter.IsLittleEndian)
                     {
-                        if (!Utf8DWordBeginsWithFourByteMaskAndHasValidFirstByteLittleEndian(thisDWord)) { goto Error; }
+                        // The DWORD we read is [ 10xxxxxx 10yyyyyy 10zzzzzz 11110www ].
+                        // We want to get the 'w' byte in front of the 'z' byte so that we can perform
+                        // a single range comparison. We'll take advantage of the fact that the JITter
+                        // can detect a ROR / ROL operation, then we'll just zero out the bytes that
+                        // aren't involved in the range check.
 
-                        // At this point, we know the first byte is [ F0..F4 ] and all subsequent bytes are [ 80..BF ].
+                        uint toCheck = (thisDWord << 24) | (thisDWord >> 8); // ROR 8 / ROL 24
 
-                        // Consider the first and last bytes in little-endian order, then the allowable ranges are:
-                        // 90F0 = 1001 0000 1111 0000 => invalid (overlong    ) pattern is 1000 #### 1111 0000
-                        // 8FF4 = 1000 1111 1111 0100 => invalid (out of range) pattern is 10@@ #### 1111 01## (where @@ is 01..11)
-                        // If using the bitmask .......................................... 0011 0000 0000 0111 (=3007),
-                        // Then invalid (overlong) patterns match the comparand .......... 0000 0000 0000 0000 (=0000),
-                        // And invalid (out of range) patterns are >= .................... 0001 0000 0000 0100 (=1004).
+                        // At this point, toCheck = [ 11110www 10xxxxxx 10yyyyyy 10zzzzzz ].
 
-                        // This allows us to get away with a single comparison, since all we need to do is ensure that
-                        // the value is in the exclusive range (0000, 1004), which is the inclusive range [0001, 1003].
+                        toCheck &= 0xFF0000FFU;
 
-                        if (!IsWithinRangeInclusive(thisDWord & 0x3007U, 0x0001U, 0x1003U)) { goto Error; }
+                        // At this point, toCheck = [ 11110www 00000000 00000000 10zzzzzz ].
+
+                        if (!IsWithinRangeInclusive(toCheck, 0xF0000090U, 0xF400008FU)) { goto Error; }
                     }
                     else
                     {
-                        // Big-endian case: simply need to check the bitmask and that the first and second bytes are within the allowable ranges.
-                        if (!Utf8DWordBeginsWithFourByteMask(thisDWord) || !IsWithinRangeInclusive(thisDWord, 0xF0900000U, 0xF48FFFFFU))
-                        {
-                            goto Error;
-                        }
+                        if (!IsWithinRangeInclusive(thisDWord, 0xF0900000U, 0xF48FFFFFU)) { goto Error; }
                     }
 
                     // Validation complete.
