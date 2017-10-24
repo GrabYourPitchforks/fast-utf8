@@ -10,6 +10,46 @@ namespace Tests
     {
         private static readonly UTF8Encoding _utf8EncodingWithoutReplacement = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
+        [Theory]
+        [InlineData(new byte[] { 0x80 }, 1)] // [ 80 ] can never appear at start of sequence, 1 invalid byte
+        [InlineData(new byte[] { 0x80, 0x80 }, 1)] // [ 80 ] can never appear at start of sequence, 1 invalid byte
+        [InlineData(new byte[] { 0xC0, 0x80 }, 1)] // [ C0 ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xC1, 0x80 }, 1)] // [ C1 ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xC2, 0x00 }, 1)] // [ C2 ] is invalid if not followed by continuation byte, 1 invalid byte
+        [InlineData(new byte[] { 0xE0, 0x00, 0x80 }, 1)] // [ E0 ] is invalid if not followed by continuation byte, 1 invalid byte
+        [InlineData(new byte[] { 0xE0, 0x80 }, 2)] // [ E0 80 ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xE0, 0x80, 0x80 }, 2)] // [ E0 80 ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xE0, 0x9F }, 2)] // [ E0 9F ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xE0, 0x9F, 0x80 }, 2)] // [ E0 9F ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xED, 0xA0 }, 2)] // [ ED A0 ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xED, 0xA0, 0x80 }, 2)] // [ ED A0 ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xF0, 0x80 }, 2)] // [ F0 80 ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xF0, 0x80, 0x80 }, 2)] // [ F0 80 ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xF0, 0x80, 0x80, 0x80 }, 2)] // [ F0 80 ] is overlong sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xF4, 0x90 }, 2)] // [ F4 90 ] is out-of-range sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xF4, 0x90, 0x80 }, 2)] // [ F4 90 ] is out-of-range sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xF4, 0x90, 0x80, 0x80 }, 2)] // [ F4 90 ] is out-of-range sequence, 2 invalid bytes
+        [InlineData(new byte[] { 0xF5 }, 1)] // [ F5 ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xF5, 0x80 }, 1)] // [ F5 ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xF5, 0x80, 0x80 }, 1)] // [ F5 ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xF5, 0x80, 0x80, 0x80 }, 1)] // [ F5 ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xFF }, 1)] // [ FF ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xFF, 0x80 }, 1)] // [ FF ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xFF, 0x80, 0x80 }, 1)] // [ FF ] is always invalid, 1 invalid byte
+        [InlineData(new byte[] { 0xFF, 0x80, 0x80, 0x80 }, 1)] // [ FF ] is always invalid, 1 invalid byte
+        public void PeekFirstSequence_WithInvalidSequence_ReturnsInvalid(byte[] sequence, int invalidSequenceLength)
+        {
+            // Act
+
+            var validity = Utf8Utility.PeekFirstSequence(sequence, out var numBytesConsumed, out var scalarValue);
+
+            // Assert
+
+            Assert.Equal(SequenceValidity.Invalid, validity);
+            Assert.Equal(invalidSequenceLength, numBytesConsumed);
+            Assert.Equal(UnicodeScalar.ReplacementChar, scalarValue);
+        }
+
         [Fact]
         public void PeekFirstSequence_WithEmptyInput_ReturnsEmptyValidity()
         {
