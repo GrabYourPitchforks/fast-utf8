@@ -1,5 +1,5 @@
 ﻿using System;
-using System.Runtime.CompilerServices;
+using System.Diagnostics;
 
 // TODO: Change all of the devdoc to use active tense instead of past tense.
 
@@ -53,7 +53,34 @@ namespace FastUtf8Tester
         /// have the same length as the input data, even if the contents are different. Use the <see cref="IsWellFormedUtf8String(ReadOnlySpan{byte})"/>
         /// method to determine if the input data is well-formed.
         /// </remarks>
-        public static int GetCountOfTotalBytesAfterInvalidSequenceReplacement(ReadOnlySpan<byte> data) => throw new NotImplementedException();
+        public static int GetCountOfTotalBytesAfterInvalidSequenceReplacement(ReadOnlySpan<byte> data)
+        {
+            int numBytesProcessedSoFar = 0;
+            while (true)
+            {
+                int indexOfFirstInvalidSequence = GetIndexOfFirstInvalidUtf8Sequence(data);
+                if (indexOfFirstInvalidSequence < 0)
+                {
+                    // All remaining data is good, add it to the cumulative total and we're done.
+                    return checked(numBytesProcessedSoFar + data.Length); // Finished!
+                }
+                else
+                {
+                    // Add the good data to the cumulative total, then add the replacement char sequence.
+                    checked { numBytesProcessedSoFar += indexOfFirstInvalidSequence; }
+
+                    data = data.Slice(indexOfFirstInvalidSequence);
+                    var validity = PeekFirstSequence(data, out int numBytesInInvalidSequence, out _);
+
+                    Debug.Assert(numBytesInInvalidSequence > 0);
+                    Debug.Assert((validity == SequenceValidity.Incomplete) || (validity == SequenceValidity.Invalid));
+
+                    // Skip over the invalid data, substituting a single replacement char sequence.
+                    data = data.Slice(numBytesInInvalidSequence);
+                    checked { numBytesProcessedSoFar += ReplacementCharacterByteSequence.Length; }
+                }
+            }
+        }
 
         /// <summary>
         /// Given the first byte of a sequence, returns the expected number of continuation bytes
