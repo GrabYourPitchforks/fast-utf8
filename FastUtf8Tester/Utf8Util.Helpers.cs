@@ -649,6 +649,12 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsContinuationByte(byte b)
+        {
+            return (byte)(b & (byte)0xC0) == (byte)0x80;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsFirstWordWellFormedTwoByteSequence(uint value)
         {
             // ASSUMPTION: Caller has already checked the '110y yyyy 10xx xxxx' mask of the input.

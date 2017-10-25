@@ -410,6 +410,8 @@ namespace FastUtf8Tester
                         if ((comparand == 0U) || (comparand == 0x0D200000U)) { goto Error; }
                     }
 
+                    ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks:
+
                     inputBufferCurrentOffset += 3;
                     inputBufferRemainingBytes -= 3;
                     tempRuneCount -= 2; // 3 bytes -> 1 rune
@@ -422,6 +424,114 @@ namespace FastUtf8Tester
                     {
                         inputBufferCurrentOffset += 1;
                         inputBufferRemainingBytes--;
+                    }
+
+                    SuccessfullyProcessedThreeBytes:
+
+                    // Optimization: A three-byte character could indicate CJK text, which makes it likely
+                    // that the character following this one is also CJK. We'll try to process several
+                    // three-byte sequences at a time.
+
+                    if (IntPtr.Size >= 8 && BitConverter.IsLittleEndian && inputBufferRemainingBytes >= (sizeof(ulong) + 1))
+                    {
+                        ulong thisQWord = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+
+                        // Is this three 3-byte sequences in a row?
+                        // thisQWord = [ 10yyyyyy 1110zzzz | 10xxxxxx 10yyyyyy 1110zzzz | 10xxxxxx 10yyyyyy 1110zzzz ] [ 10xxxxxx ]
+                        //               ---- CHAR 3  ----   --------- CHAR 2 ---------   --------- CHAR 1 ---------     -CHAR 3-
+                        if ((thisQWord & 0xC0F0C0C0F0C0C0F0UL) == 0x80E08080E08080E0UL)
+                        {
+                            // Saw a proper bitmask for three incoming 3-byte sequences, perform the
+                            // overlong and surrogate sequence checking now.
+
+                            // Check the first character.
+                            // If the first character is overlong or a surrogate, fail immediately.
+
+                            uint comparand = (uint)thisQWord & 0x200FU;
+                            if ((comparand == 0UL) || (comparand == 0x200DU))
+                            {
+                                goto Error;
+                            }
+
+                            // Check the second character.
+                            // If this character is overlong or a surrogate, process the first character (which we
+                            // know to be good because the first check passed) before reporting an error.
+
+                            comparand = (uint)(thisQWord >> 24) & 0x200FU;
+                            if ((comparand == 0U) || (comparand == 0x200DU))
+                            {
+                                goto FirstThreeByteSequenceIsValidButSubsequentSequenceIsInvalid;
+                            }
+
+                            // Check the third character (and that the next unread byte is a continuation byte).
+                            // If this character is overlong or a surrogate, process the first character (which we
+                            // know to be good because the first check passed) before reporting an error.
+
+                            comparand = (uint)(thisQWord >> 48) & 0x200FU;
+                            if ((comparand == 0U) || (comparand == 0x200DU) || !IsContinuationByte(Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong))))
+                            {
+                                goto FirstThreeByteSequenceIsValidButSubsequentSequenceIsInvalid;
+                            }
+
+                            inputBufferCurrentOffset += 9;
+                            inputBufferRemainingBytes -= 9;
+                            tempRuneCount -= 6; // 9 bytes -> 3 runes
+                            goto SuccessfullyProcessedThreeBytes;
+
+                            FirstThreeByteSequenceIsValidButSubsequentSequenceIsInvalid:
+
+                            thisDWord = (uint)thisQWord;
+                            goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
+                        }
+
+                        // Is this two 3-byte sequences in a row?
+                        // thisQWord = [ ######## ######## | 10xxxxxx 10yyyyyy 1110zzzz | 10xxxxxx 10yyyyyy 1110zzzz ]
+                        //                                   --------- CHAR 2 ---------   --------- CHAR 1 ---------
+                        if ((thisQWord & 0xC0C0F0C0C0F0UL) == 0x8080E08080E0UL)
+                        {
+                            // Saw a proper bitmask for three incoming 3-byte sequences, perform the
+                            // overlong and surrogate sequence checking now.
+
+                            // Check the first character.
+                            // If the first character is overlong or a surrogate, fail immediately.
+
+                            uint comparand = (uint)thisQWord & 0x200FU;
+                            if ((comparand == 0UL) || (comparand == 0x200DU))
+                            {
+                                goto Error;
+                            }
+
+                            // Check the second character.
+                            // If this character is overlong or a surrogate, process the first character (which we
+                            // know to be good because the first check passed) before reporting an error.
+
+                            comparand = (uint)(thisQWord >> 24) & 0x200FU;
+                            if ((comparand == 0U) || (comparand == 0x200DU))
+                            {
+                                thisDWord = (uint)thisQWord;
+                                goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
+                            }
+
+                            inputBufferCurrentOffset += 6;
+                            inputBufferRemainingBytes -= 6;
+                            tempRuneCount -= 4; // 6 bytes -> 2 runes
+
+                            // The next char in the sequence didn't have a 3-byte marker, so it's probably
+                            // an ASCII character. Jump back to the beginning of loop processing.
+                            continue;
+                        }
+
+                        thisDWord = (uint)thisQWord;
+                        if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
+                        {
+                            // A single three-byte sequence.
+                            goto ProcessThreeByteSequenceWithCheck;
+                        }
+                        else
+                        {
+                            // Not a three-byte sequence; perhaps ASCII?
+                            goto AfterReadDWord;
+                        }
                     }
 
                     if (inputBufferRemainingBytes >= sizeof(uint))
