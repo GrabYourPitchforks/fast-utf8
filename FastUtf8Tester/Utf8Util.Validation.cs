@@ -110,7 +110,7 @@ namespace FastUtf8Tester
             }
 
             IntPtr inputBufferOffsetAtWhichToAllowUnrolling = IntPtr.Zero;
-            int inputBufferRemainingBytes = inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
+            IntPtr fffx = (IntPtr)(inputLength - sizeof(uint));
 
             // Begin the main loop.
 
@@ -118,14 +118,16 @@ namespace FastUtf8Tester
             long lastOffsetProcessed = -1; // used for invariant checking in debug builds
 #endif
 
-            while (inputBufferRemainingBytes >= sizeof(uint))
+            while (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, fffx))
             {
                 BeforeReadDWord:
 
                 // Read 32 bits at a time. This is enough to hold any possible UTF8-encoded scalar.
 
                 Debug.Assert(inputLength - (int)inputBufferCurrentOffset >= sizeof(uint));
-                uint thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                //uint thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+
+                uint thisDWord = Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
 
                 AfterReadDWord:
 
@@ -141,7 +143,6 @@ namespace FastUtf8Tester
                     // We read an all-ASCII sequence.
 
                     inputBufferCurrentOffset += 4;
-                    inputBufferRemainingBytes -= 4;
 
                     // If we saw a sequence of all ASCII, there's a good chance a significant amount of following data is also ASCII.
                     // Below is basically unrolled loops with poor man's vectorization.
@@ -155,9 +156,10 @@ namespace FastUtf8Tester
                     }
                     else
                     {
+                        IntPtr ix = (IntPtr)(inputLength - 2 * sizeof(ulong));
                         if (IntPtr.Size >= 8)
                         {
-                            while (inputBufferRemainingBytes >= 2 * sizeof(ulong))
+                            while (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, ix))
                             {
                                 // Don't use the "read and fold" utility method here since the JITter produces sub-optimal assembly,
                                 // even with forced inlining.
@@ -172,12 +174,11 @@ namespace FastUtf8Tester
                                 }
 
                                 inputBufferCurrentOffset += 2 * sizeof(ulong);
-                                inputBufferRemainingBytes -= 2 * sizeof(ulong);
                             }
                         }
                         else
                         {
-                            while (inputBufferRemainingBytes >= 4 * sizeof(uint))
+                            while (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, fffx))
                             {
                                 // Don't use the "read and fold" utility method here since the JITter produces sub-optimal assembly,
                                 // even with forced inlining.
@@ -194,7 +195,6 @@ namespace FastUtf8Tester
                                 }
 
                                 inputBufferCurrentOffset += 4 * sizeof(uint);
-                                inputBufferRemainingBytes -= 4 * sizeof(uint);
                             }
                         }
                     }
@@ -211,22 +211,13 @@ namespace FastUtf8Tester
                     {
                         if (Utf8DWordThirdByteIsAscii(thisDWord))
                         {
-                            inputBufferCurrentOffset += 3;
-                            inputBufferRemainingBytes -= 3;
+                            inputBufferCurrentOffset += 1;
                         }
-                        else
-                        {
-                            inputBufferCurrentOffset += 2;
-                            inputBufferRemainingBytes -= 2;
-                        }
-                    }
-                    else
-                    {
                         inputBufferCurrentOffset += 1;
-                        inputBufferRemainingBytes--;
                     }
+                    inputBufferCurrentOffset += 1;
 
-                    if (inputBufferRemainingBytes < sizeof(uint))
+                    if (!IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, fffx))
                     {
                         goto ProcessRemainingBytesSlow; // Input buffer doesn't contain enough data to read a DWORD
                     }
@@ -272,10 +263,9 @@ namespace FastUtf8Tester
 
                         // We have two runs of two bytes each.
                         inputBufferCurrentOffset += 4;
-                        inputBufferRemainingBytes -= 4;
                         tempRuneCount -= 2; // 4 bytes -> 2 runes
 
-                        if (inputBufferRemainingBytes >= sizeof(uint))
+                        if (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, fffx))
                         {
                             // Optimization: If we read a long run of two-byte sequences, the next sequence is probably
                             // also two bytes. Check for that first before going back to the beginning of the loop.
@@ -341,19 +331,17 @@ namespace FastUtf8Tester
                         if (Utf8DWordFourthByteIsAscii(thisDWord))
                         {
                             inputBufferCurrentOffset += 4; // a 2-byte sequence + 2 ASCII bytes
-                            inputBufferRemainingBytes -= 4; // a 2-byte sequence + 2 ASCII bytes
                             tempRuneCount--; // 2-byte sequence + 2 ASCII bytes -> 3 runes
                         }
                         else
                         {
                             inputBufferCurrentOffset += 3; // a 2-byte sequence + 1 ASCII byte
-                            inputBufferRemainingBytes -= 3; // a 2-byte sequence + 1 ASCII byte
                             tempRuneCount--; // 2-byte sequence + 1 ASCII bytes -> 2 runes
 
                             // A two-byte sequence followed by an ASCII byte followed by a non-ASCII byte.
                             // Read in the next DWORD and jump directly to the start of the multi-byte processing block.
 
-                            if (inputBufferRemainingBytes >= sizeof(uint))
+                            if (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, fffx))
                             {
                                 thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
                                 goto BeforeProcessTwoByteSequence;
@@ -363,7 +351,6 @@ namespace FastUtf8Tester
                     else
                     {
                         inputBufferCurrentOffset += 2;
-                        inputBufferRemainingBytes -= 2;
                         tempRuneCount--; // 2-byte sequence -> 1 rune1
                     }
 
@@ -411,7 +398,6 @@ namespace FastUtf8Tester
                     }
 
                     inputBufferCurrentOffset += 3;
-                    inputBufferRemainingBytes -= 3;
                     tempRuneCount -= 2; // 3 bytes -> 1 rune
 
                     // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
@@ -421,10 +407,9 @@ namespace FastUtf8Tester
                     if (Utf8DWordFourthByteIsAscii(thisDWord))
                     {
                         inputBufferCurrentOffset += 1;
-                        inputBufferRemainingBytes--;
                     }
 
-                    if (inputBufferRemainingBytes >= sizeof(uint))
+                    if (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, fffx))
                     {
                         thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
 
@@ -488,7 +473,6 @@ namespace FastUtf8Tester
                     // Validation complete.
 
                     inputBufferCurrentOffset += 4;
-                    inputBufferRemainingBytes -= 4;
                     tempRuneCount -= 3; // 4 bytes -> 1 rune
                     tempSurrogatePairCount++; // 4 bytes implies UTF16 surrogate pair
 
@@ -498,6 +482,7 @@ namespace FastUtf8Tester
 
             ProcessRemainingBytesSlow:
 
+            int inputBufferRemainingBytes = inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
             Debug.Assert(inputBufferRemainingBytes < 4);
             while (inputBufferRemainingBytes > 0)
             {
@@ -568,7 +553,7 @@ namespace FastUtf8Tester
 
             Error:
 
-            runeCount = tempRuneCount - inputBufferRemainingBytes; // we assumed earlier each byte corresponded to a single rune, perform fixup now to account for unread bytes
+            runeCount = tempRuneCount - (inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset)); // we assumed earlier each byte corresponded to a single rune, perform fixup now to account for unread bytes
             surrogatePairCount = tempSurrogatePairCount;
             return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
         }
