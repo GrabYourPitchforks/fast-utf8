@@ -69,18 +69,18 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 
 ### UTF8 to UTF16
 
-* `System.Text.Encoding.UTF8`: 4.30 sec
-* `Encodings.Utf8.ToUtf16`: 4.22 sec
-* `Utf8Util.ConvertUtf8ToUtf16`: 3.23 sec
+* `System.Text.Encoding.UTF8`: 4.30 sec _(old sample text)_
+* `Encodings.Utf8.ToUtf16`: 4.22 sec _(old sample text)_
+* `Utf8Util.ConvertUtf8ToUtf16`: 3.23 sec _(old sample text)_
 
 25% reduction in runtime
 
 ### Get UTF16 char count from UTF8
 
-* `System.Text.Encoding.UTF8`: 3.52 sec
-* `Utf8Util.GetCharCount`: 1.80 sec
+* `System.Text.Encoding.UTF8`: 3.06 sec
+* `Utf8Util.GetCharCount`: 1.08 sec
 
-48% reduction in runtime
+65% reduction in runtime
 
 ## Chinese
 
@@ -88,15 +88,15 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 
 ### UTF8 to UTF16
 
-* `System.Text.Encoding.UTF8`: 9.76 sec
-* `Encodings.Utf8.ToUtf16`: 9.57 sec
-* `Utf8Util.ConvertUtf8ToUtf16`: 5.53 sec
+* `System.Text.Encoding.UTF8`: 9.76 sec _(old sample text)_
+* `Encodings.Utf8.ToUtf16`: 9.57 sec _(old sample text)_
+* `Utf8Util.ConvertUtf8ToUtf16`: 5.53 sec _(old sample text)_
 
 45% reduction in runtime
 
 ### Get UTF16 char count from UTF8
 
-* `System.Text.Encoding.UTF8`: 8.66 sec
-* `Utf8Util.GetCharCount`: 2.99 sec
+* `System.Text.Encoding.UTF8`: 6.30 sec
+* `Utf8Util.GetCharCount`: 2.25 sec
 
 65% reduction in runtime
