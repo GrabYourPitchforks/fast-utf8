@@ -546,7 +546,7 @@ namespace FastUtf8Tester
                         }
                         else
                         {
-                            goto AfterReadDWord; // Probably ASCI punctuation or whitespace; go back to start of loop
+                            goto AfterReadDWord; // Probably ASCII punctuation or whitespace; go back to start of loop
                         }
                     }
                     else
