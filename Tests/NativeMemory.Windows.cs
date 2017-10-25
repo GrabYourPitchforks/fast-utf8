@@ -52,7 +52,7 @@ namespace Tests
                 handle: handle,
                 offset: (placement == PoisonPagePlacement.BeforeSpan)
                     ? SystemPageSize /* just after leading poison page */
-                    : checked((int)(totalBytesToAllocate - SystemPageSize - cb)) /* just beforr trailing poison page */,
+                    : checked((int)(totalBytesToAllocate - SystemPageSize - cb)) /* just before trailing poison page */,
                 length: cb)
             {
                 Protection = VirtualAllocProtection.PAGE_READWRITE
