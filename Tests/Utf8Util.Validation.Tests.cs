@@ -79,6 +79,7 @@ namespace Tests
         [InlineData(EURO_SYMBOL + EURO_SYMBOL + E_ACUTE + E_ACUTE + E_ACUTE + E_ACUTE, 6, 0)] // 2x 3-byte sequences + 4x 2-byte sequences, exercises "consume multiple bytes at a time" logic in 3-byte sequence processing
         [InlineData(GRINNING_FACE + GRINNING_FACE, 2, 2)] // 2x 4-byte sequences, exercises 4-byte sequence processing
         [InlineData(GRINNING_FACE + "303132", 4, 2)] // single 4-byte sequence + 3 ASCII bytes, exercises 4-byte sequence processing and draining logic
+        [InlineData("F09FA4B8" + "F09F8FBD" + "E2808D" + "E29980" + "EFB88F", 5, 2)] // U+1F938 U+1F3FD U+200D U+2640 U+FE0F WOMAN CARTWHEELING: MEDIUM SKIN TONE, exercising switching between multiple sequence lengths
         public void GetIndexOfFirstInvalidUtf8Sequence_WithLargeValidBuffers(string input, int expectedRuneCount, int expectedSurrogatePairCount)
         {
             // These test cases are for the "fast processing" code which is the main loop of GetIndexOfFirstInvalidUtf8Sequence,
