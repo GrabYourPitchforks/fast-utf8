@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using FastUtf8Tester;
 using Xunit;
 
@@ -6,11 +6,12 @@ namespace Tests
 {
     public class Utf8UtilTests
     {
-        private const string X = "58"; // "X", 1 byte
-        private const string Y = "59"; // "Y", 1 byte
-        private const string Z = "5A"; // "Z", 1 byte
-        private const string E_ACUTE = "C3A9"; // "é", 2 bytes
-        private const string EURO_SYMBOL = "E282AC"; // "€", 3 bytes
+        private const string X = "58"; // U+0058 LATIN CAPITAL LETTER X, 1 byte
+        private const string Y = "59"; // U+0058 LATIN CAPITAL LETTER Y, 1 byte
+        private const string Z = "5A"; // U+0058 LATIN CAPITAL LETTER Z, 1 byte
+        private const string E_ACUTE = "C3A9"; // U+00E9 LATIN SMALL LETTER E WITH ACUTE, 2 bytes
+        private const string EURO_SYMBOL = "E282AC"; // U+20AC EURO SIGN, 3 bytes
+        private const string GRINNING_FACE = "F09F9880"; // U+1F600 GRINNING FACE, 4 bytes
 
         [Theory]
         [InlineData("", 0, 0)] // empty string is OK
@@ -26,7 +27,7 @@ namespace Tests
             // These test cases are for the "slow processing" code path at the end of GetIndexOfFirstInvalidUtf8Sequence,
             // so inputs should be less than 4 bytes.
 
-            Assert.InRange(input.Length / 2, 0, 3);
+            Assert.InRange(input.Length, 0, 6);
 
             GetIndexOfFirstInvalidUtf8Sequence_Test_Core(input, -1 /* expectedRetVal */, expectedRuneCount, expectedSurrogatePairCount);
         }
@@ -55,9 +56,37 @@ namespace Tests
             // These test cases are for the "slow processing" code path at the end of GetIndexOfFirstInvalidUtf8Sequence,
             // so inputs should be less than 4 bytes.
 
-            Assert.InRange(input.Length / 2, 0, 3);
+            Assert.InRange(input.Length, 0, 6);
 
             GetIndexOfFirstInvalidUtf8Sequence_Test_Core(input, expectedRetVal, expectedRuneCount, expectedSurrogatePairCount);
+        }
+
+        [Theory]
+        [InlineData(E_ACUTE + "21222324" + "303132333435363738393A3B3C3D3E3F", 21, 0)] // Loop unrolling at end of buffer
+        [InlineData(E_ACUTE + "21222324" + "303132333435363738393A3B3C3D3E3F" + "3031323334353637" + E_ACUTE + "38393A3B3C3D3E3F", 38, 0)] // Loop unrolling interrupted by non-ASCII
+        [InlineData("212223" + E_ACUTE + "30313233", 8, 0)] // 3 ASCII bytes followed by non-ASCII
+        [InlineData("2122" + E_ACUTE + "30313233", 7, 0)] // 2 ASCII bytes followed by non-ASCII
+        [InlineData("21" + E_ACUTE + "30313233", 6, 0)] // 1 ASCII byte followed by non-ASCII
+        [InlineData(E_ACUTE + E_ACUTE + E_ACUTE + E_ACUTE, 4, 0)] // 4x 2-byte sequences, exercises optimization code path in 2-byte sequence processing
+        [InlineData(E_ACUTE + E_ACUTE + E_ACUTE + "5051", 5, 0)] // 3x 2-byte sequences + 2 ASCII bytes, exercises optimization code path in 2-byte sequence processing
+        [InlineData(E_ACUTE + "5051", 3, 0)] // single 2-byte sequence + 2 trailing ASCII bytes, exercises draining logic in 2-byte sequence processing
+        [InlineData(E_ACUTE + "50" + E_ACUTE + "304050", 6, 0)] // single 2-byte sequences + 1 trailing ASCII byte + 2-byte sequence, exercises draining logic in 2-byte sequence processing
+        [InlineData(EURO_SYMBOL + "20", 2, 0)] // single 3-byte sequence + 1 trailing ASCII byte, exercises draining logic in 3-byte sequence processing
+        [InlineData(EURO_SYMBOL + "203040", 5, 0)] // single 3-byte sequence + 3 trailing ASCII byte, exercises draining logic and "running out of data" logic in 3-byte sequence processing
+        [InlineData(EURO_SYMBOL + EURO_SYMBOL + EURO_SYMBOL, 3, 0)] // 3x 3-byte sequences, exercises "stay within 3-byte loop" logic in 3-byte sequence processing
+        [InlineData(EURO_SYMBOL + EURO_SYMBOL + EURO_SYMBOL + EURO_SYMBOL, 4, 0)] // 4x 3-byte sequences, exercises "consume multiple bytes at a time" logic in 3-byte sequence processing
+        [InlineData(EURO_SYMBOL + EURO_SYMBOL + EURO_SYMBOL + E_ACUTE, 4, 0)] // 3x 3-byte sequences + single 2-byte sequence, exercises "consume multiple bytes at a time" logic in 3-byte sequence processing
+        [InlineData(EURO_SYMBOL + EURO_SYMBOL + E_ACUTE + E_ACUTE + E_ACUTE + E_ACUTE, 6, 0)] // 2x 3-byte sequences + 4x 2-byte sequences, exercises "consume multiple bytes at a time" logic in 3-byte sequence processing
+        [InlineData(GRINNING_FACE + GRINNING_FACE, 2, 2)] // 2x 4-byte sequences, exercises 4-byte sequence processing
+        [InlineData(GRINNING_FACE + "303132", 4, 2)] // single 4-byte sequence + 3 ASCII bytes, exercises 4-byte sequence processing and draining logic
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithLargeValidBuffers(string input, int expectedRuneCount, int expectedSurrogatePairCount)
+        {
+            // These test cases are for the "fast processing" code which is the main loop of GetIndexOfFirstInvalidUtf8Sequence,
+            // so inputs should be less >= 4 bytes.
+
+            Assert.True(input.Length >= 8);
+
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(input, -1 /* expectedRetVal */, expectedRuneCount, expectedSurrogatePairCount);
         }
 
         private static void GetIndexOfFirstInvalidUtf8Sequence_Test_Core(string inputHex, int expectedRetVal, int expectedRuneCount, int expectedSurrogatePairCount)
