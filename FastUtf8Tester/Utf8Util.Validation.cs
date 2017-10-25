@@ -372,7 +372,35 @@ namespace FastUtf8Tester
 
                 // Check the 3-byte case.
 
-                if (Utf8DWordBeginsWithThreeByteMask(thisDWord))
+                uint uu = (thisDWord & 0x00C0FFFF) - 0x808000;
+                if (uu<=(ushort)(0xBFFF-0x8000))
+                {
+                    // middle byte is [ 80..9F ]
+                    // need to ensure low byte is 10xxxxxx and high byte is [ E1..EF ]
+                    //uu <<= 18;
+                    thisDWord ^= (uu >> 13) * 0xD;
+                    thisDWord ^= 0x10;
+                    goto Stuff;
+                }
+                //if (uu<=(ushort)(0xBFFF-0x8000))
+                //{
+                //    // middle byte is [ A0..BF ]
+                //    // need to ensure low byte is 10xxxxxx and high byte is [ E0..EF ] but *not* [ ED ]
+                //    thisDWord ^= 0x1D;
+                //    goto Stuff;
+                // }
+
+                goto BeforeProcessFourByteSequence;
+
+                Stuff:
+
+                if ((byte)(thisDWord) >= (byte)0xF1) { goto KnownGoodThreeByteSeq; }
+
+                goto BeforeProcessFourByteSequence;
+
+
+                KnownGoodThreeByteSeq:
+
                 {
                     ProcessThreeByteSequenceWithCheck:
 
@@ -391,24 +419,24 @@ namespace FastUtf8Tester
                     // Then invalid (overlong) patterns match the comparand ......... 0000 0000 0000 0000 (=0000),
                     // And invalid (surrogate) patterns match the comparand ......... 0000 1101 0010 0000 (=0D20).
 
-                    if (BitConverter.IsLittleEndian)
-                    {
-                        // The "overlong or surrogate" check can be implemented using a single jump, but there's
-                        // some overhead to moving the bits into the correct locations in order to perform the
-                        // correct comparison, and in practice the processor's branch prediction capability is
-                        // good enough that we shouldn't bother. So we'll use two jumps instead.
+                    //if (BitConverter.IsLittleEndian)
+                    //{
+                    //    // The "overlong or surrogate" check can be implemented using a single jump, but there's
+                    //    // some overhead to moving the bits into the correct locations in order to perform the
+                    //    // correct comparison, and in practice the processor's branch prediction capability is
+                    //    // good enough that we shouldn't bother. So we'll use two jumps instead.
 
-                        // Can't extract this check into its own helper method because JITter produces suboptimal
-                        // assembly, even with aggressive inlining.
+                    //    // Can't extract this check into its own helper method because JITter produces suboptimal
+                    //    // assembly, even with aggressive inlining.
 
-                        uint comparand = thisDWord & 0x0000200FU;
-                        if ((comparand == 0U) || (comparand == 0x0000200DU)) { goto Error; }
-                    }
-                    else
-                    {
-                        uint comparand = thisDWord & 0x0F200000U;
-                        if ((comparand == 0U) || (comparand == 0x0D200000U)) { goto Error; }
-                    }
+                    //    uint comparand = thisDWord & 0x0000200FU;
+                    //    if ((comparand == 0U) || (comparand == 0x0000200DU)) { goto Error; }
+                    //}
+                    //else
+                    //{
+                    //    uint comparand = thisDWord & 0x0F200000U;
+                    //    if ((comparand == 0U) || (comparand == 0x0D200000U)) { goto Error; }
+                    //}
 
                     inputBufferCurrentOffset += 3;
                     inputBufferRemainingBytes -= 3;
@@ -449,6 +477,8 @@ namespace FastUtf8Tester
                 }
 
                 // Assume the 4-byte case, but we need to validate.
+
+                BeforeProcessFourByteSequence:
 
                 {
                     // We need to check for overlong or invalid (over U+10FFFF) four-byte sequences.

@@ -105,6 +105,9 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool IsWithinRangeInclusive(ushort value, ushort lowerBound, ushort upperBound) => ((ushort)(value - lowerBound) <= (ushort)(upperBound - lowerBound));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool IsWithinRangeInclusive(uint value, uint lowerBound, uint upperBound) => ((value - lowerBound) <= (upperBound - lowerBound));
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

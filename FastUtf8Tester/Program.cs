@@ -100,7 +100,7 @@ namespace FastUtf8Tester
                 stopwatch.Restart();
                 for (int j = 0; j < NUM_ITERS; j++)
                 {
-                    Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
+                    Utf8Util.GetUtf16CharCount(asBytes);
                 }
                 Console.WriteLine($"Elapsed: {stopwatch.Elapsed}");
             }
