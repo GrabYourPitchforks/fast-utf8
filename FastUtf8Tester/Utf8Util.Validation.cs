@@ -426,7 +426,7 @@ namespace FastUtf8Tester
                         inputBufferRemainingBytes--;
                     }
 
-                    SuccessfullyProcessedThreeBytes:
+                    SuccessfullyProcessedThreeByteSequence:
 
                     // Optimization: A three-byte character could indicate CJK text, which makes it likely
                     // that the character following this one is also CJK. We'll try to process several
@@ -439,7 +439,7 @@ namespace FastUtf8Tester
                         // Is this three 3-byte sequences in a row?
                         // thisQWord = [ 10yyyyyy 1110zzzz | 10xxxxxx 10yyyyyy 1110zzzz | 10xxxxxx 10yyyyyy 1110zzzz ] [ 10xxxxxx ]
                         //               ---- CHAR 3  ----   --------- CHAR 2 ---------   --------- CHAR 1 ---------     -CHAR 3-
-                        if ((thisQWord & 0xC0F0C0C0F0C0C0F0UL) == 0x80E08080E08080E0UL)
+                        if ((thisQWord & 0xC0F0C0C0F0C0C0F0UL) == 0x80E08080E08080E0UL && IsContinuationByte(Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong))))
                         {
                             // Saw a proper bitmask for three incoming 3-byte sequences, perform the
                             // overlong and surrogate sequence checking now.
@@ -460,7 +460,8 @@ namespace FastUtf8Tester
                             comparand = (uint)(thisQWord >> 24) & 0x200FU;
                             if ((comparand == 0U) || (comparand == 0x200DU))
                             {
-                                goto FirstThreeByteSequenceIsValidButSubsequentSequenceIsInvalid;
+                                thisDWord = (uint)thisQWord;
+                                goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
                             }
 
                             // Check the third character (and that the next unread byte is a continuation byte).
@@ -468,20 +469,16 @@ namespace FastUtf8Tester
                             // know to be good because the first check passed) before reporting an error.
 
                             comparand = (uint)(thisQWord >> 48) & 0x200FU;
-                            if ((comparand == 0U) || (comparand == 0x200DU) || !IsContinuationByte(Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong))))
+                            if ((comparand == 0U) || (comparand == 0x200DU))
                             {
-                                goto FirstThreeByteSequenceIsValidButSubsequentSequenceIsInvalid;
+                                thisDWord = (uint)thisQWord;
+                                goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
                             }
 
                             inputBufferCurrentOffset += 9;
                             inputBufferRemainingBytes -= 9;
                             tempRuneCount -= 6; // 9 bytes -> 3 runes
-                            goto SuccessfullyProcessedThreeBytes;
-
-                            FirstThreeByteSequenceIsValidButSubsequentSequenceIsInvalid:
-
-                            thisDWord = (uint)thisQWord;
-                            goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
+                            goto SuccessfullyProcessedThreeByteSequence;
                         }
 
                         // Is this two 3-byte sequences in a row?
@@ -489,7 +486,7 @@ namespace FastUtf8Tester
                         //                                   --------- CHAR 2 ---------   --------- CHAR 1 ---------
                         if ((thisQWord & 0xC0C0F0C0C0F0UL) == 0x8080E08080E0UL)
                         {
-                            // Saw a proper bitmask for three incoming 3-byte sequences, perform the
+                            // Saw a proper bitmask for two incoming 3-byte sequences, perform the
                             // overlong and surrogate sequence checking now.
 
                             // Check the first character.
