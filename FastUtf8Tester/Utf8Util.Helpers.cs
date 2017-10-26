@@ -6,6 +6,12 @@ namespace FastUtf8Tester
 {
     internal static partial class Utf8Util
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static unsafe int GetNumBytesToFlushForDWordAlignment(ref byte reference)
+        {
+            return (-(int)Unsafe.AsPointer(ref reference)) & 0x3;
+        }
+
         // Assuming 'buffer' points to the start of an invalid sequence, returns the length (in bytes)
         // of the invalid sequence.
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -215,7 +221,7 @@ namespace FastUtf8Tester
         {
             return !EitherInt32IsNegative(a, b);
         }
-        
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian(uint value)
         {

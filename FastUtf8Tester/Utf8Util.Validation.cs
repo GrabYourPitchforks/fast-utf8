@@ -153,62 +153,62 @@ namespace FastUtf8Tester
                         // a bounds check here since we already checked the bounds as part of the loop unrolling path.
                         goto BeforeReadDWord;
                     }
-                    else
+                    else if (inputBufferRemainingBytes >= 3 + 4 * sizeof(uint))
                     {
-                        if (IntPtr.Size >= 8)
                         {
-                            while (inputBufferRemainingBytes >= 2 * sizeof(ulong))
+                            ref byte refToNextDWord = ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset);
+                            int numBytesToConsumeUntilAligned = GetNumBytesToFlushForDWordAlignment(ref refToNextDWord);
+                            if (numBytesToConsumeUntilAligned > 0)
                             {
-                                // Don't use the "read and fold" utility method here since the JITter produces sub-optimal assembly,
-                                // even with forced inlining.
-
-                                ulong thisQWord = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset))
-                                    | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong)));
-
-                                if (!Utf8QWordAllBytesAreAscii(thisQWord))
-                                {
-                                    // Non-ASCII data incoming, set flag which tells us not to go down this code path.
-                                    // Fudge the value slightly if we're approaching the end of the buffer so we don't overrun it.
-                                    // We know the code below won't overflow because the loop invariant requires that there be
-                                    // enough remaining bytes to fit into an Int32.
-                                    inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 2 * sizeof(ulong), inputLength - sizeof(uint));
-                                    goto BeforeReadDWord;
-                                }
-
-                                inputBufferCurrentOffset += 2 * sizeof(ulong);
-                                inputBufferRemainingBytes -= 2 * sizeof(ulong);
-                            }
-                        }
-                        else
-                        {
-                            while (inputBufferRemainingBytes >= 4 * sizeof(uint))
-                            {
-                                // Don't use the "read and fold" utility method here since the JITter produces sub-optimal assembly,
-                                // even with forced inlining.
-
-                                thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset))
-                                    | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(uint)))
-                                    | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2 * sizeof(uint)))
-                                    | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 3 * sizeof(uint)));
-
+                                thisDWord = Unsafe.ReadUnaligned<uint>(ref refToNextDWord); // don't care about flushing out byte-by-byte, just try to read all at once
                                 if (!Utf8DWordAllBytesAreAscii(thisDWord))
                                 {
-                                    // Non-ASCII data incoming, set flag which tells us not to go down this code path.
-                                    // Fudge the value slightly if we're approaching the end of the buffer so we don't overrun it.
-                                    // We know the code below won't overflow because the loop invariant requires that there be
-                                    // enough remaining bytes to fit into an Int32.
-                                    inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 4 * sizeof(uint), inputLength - sizeof(uint));
-                                    goto BeforeReadDWord;
+                                    goto AfterReadDWordSkipAllBytesAsciiCheck;
                                 }
 
-                                inputBufferCurrentOffset += 4 * sizeof(uint);
-                                inputBufferRemainingBytes -= 4 * sizeof(uint);
+                                inputBufferCurrentOffset += numBytesToConsumeUntilAligned;
+                                inputBufferRemainingBytes -= numBytesToConsumeUntilAligned;
                             }
                         }
+
+                        // At this point, the input buffer offset points to an aligned DWORD.
+                        // This will remain true even if the GC moves things around, as the GC will never change the
+                        // alignment of data that it moves.
+
+                        // We also know that there's enough room to read at least four DWORDs from the stream.
+
+                        do
+                        {
+                            ref uint currentReadPosition = ref Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+
+                            if (!Utf8DWordAllBytesAreAscii(currentReadPosition | Unsafe.Add(ref currentReadPosition, 1)))
+                            {
+                                inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + 2 * sizeof(uint);
+                                goto BeforeReadDWord;
+                            }
+
+                            if (!Utf8DWordAllBytesAreAscii(Unsafe.Add(ref currentReadPosition, 2) | Unsafe.Add(ref currentReadPosition, 3)))
+                            {
+                                inputBufferCurrentOffset += 2 * sizeof(uint);
+                                inputBufferRemainingBytes -= 2 * sizeof(uint);
+
+                                // Need to fudge the 'offset at which to allow unrolling' number so we don't cause
+                                // the next iteration to cause a buffer overrun.
+                                inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 2 * sizeof(uint), inputLength - 2 * sizeof(uint));
+                                goto BeforeReadDWord;
+                            }
+
+                            inputBufferCurrentOffset += 4 * sizeof(uint);
+                            inputBufferRemainingBytes -= 4 * sizeof(uint);
+                        } while (inputBufferRemainingBytes >= 4 * sizeof(uint));
                     }
 
                     continue;
                 }
+
+                AfterReadDWordSkipAllBytesAsciiCheck:
+
+                Debug.Assert(!Utf8DWordAllBytesAreAscii(thisDWord)); // this should have been handled earlier
 
                 // Next, try stripping off ASCII bytes one at a time.
                 // We only handle up to three ASCII bytes here since we handled the four ASCII byte case above.
