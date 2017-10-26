@@ -472,7 +472,7 @@ namespace FastUtf8Tester
                                 goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
                             }
 
-                            // Check the third character (and that the next unread byte is a continuation byte).
+                            // Check the third character (we already checked that it's followed by a continuation byte).
                             // If this character is overlong or a surrogate, process the first character (which we
                             // know to be good because the first check passed) before reporting an error.
 
