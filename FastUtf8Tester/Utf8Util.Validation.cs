@@ -167,7 +167,11 @@ namespace FastUtf8Tester
 
                                 if (!Utf8QWordAllBytesAreAscii(thisQWord))
                                 {
-                                    inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + 2 * sizeof(ulong); // non-ASCII data incoming
+                                    // Non-ASCII data incoming, set flag which tells us not to go down this code path.
+                                    // Fudge the value slightly if we're approaching the end of the buffer so we don't overrun it.
+                                    // We know the code below won't overflow because the loop invariant requires that there be
+                                    // enough remaining bytes to fit into an Int32.
+                                    inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 2 * sizeof(ulong), inputLength - sizeof(uint));
                                     goto BeforeReadDWord;
                                 }
 
@@ -189,7 +193,11 @@ namespace FastUtf8Tester
 
                                 if (!Utf8DWordAllBytesAreAscii(thisDWord))
                                 {
-                                    inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + 4 * sizeof(uint); // non-ASCII data incoming
+                                    // Non-ASCII data incoming, set flag which tells us not to go down this code path.
+                                    // Fudge the value slightly if we're approaching the end of the buffer so we don't overrun it.
+                                    // We know the code below won't overflow because the loop invariant requires that there be
+                                    // enough remaining bytes to fit into an Int32.
+                                    inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 4 * sizeof(uint), inputLength - sizeof(uint));
                                     goto BeforeReadDWord;
                                 }
 

@@ -72,13 +72,13 @@ namespace Tests
         [InlineData(E_ACUTE + "5051", 3, 0)] // single 2-byte sequence + 2 trailing ASCII bytes, exercises draining logic in 2-byte sequence processing
         [InlineData(E_ACUTE + "50" + E_ACUTE + "304050", 6, 0)] // single 2-byte sequences + 1 trailing ASCII byte + 2-byte sequence, exercises draining logic in 2-byte sequence processing
         [InlineData(EURO_SYMBOL + "20", 2, 0)] // single 3-byte sequence + 1 trailing ASCII byte, exercises draining logic in 3-byte sequence processing
-        [InlineData(EURO_SYMBOL + "203040", 5, 0)] // single 3-byte sequence + 3 trailing ASCII byte, exercises draining logic and "running out of data" logic in 3-byte sequence processing
+        [InlineData(EURO_SYMBOL + "203040", 4, 0)] // single 3-byte sequence + 3 trailing ASCII byte, exercises draining logic and "running out of data" logic in 3-byte sequence processing
         [InlineData(EURO_SYMBOL + EURO_SYMBOL + EURO_SYMBOL, 3, 0)] // 3x 3-byte sequences, exercises "stay within 3-byte loop" logic in 3-byte sequence processing
         [InlineData(EURO_SYMBOL + EURO_SYMBOL + EURO_SYMBOL + EURO_SYMBOL, 4, 0)] // 4x 3-byte sequences, exercises "consume multiple bytes at a time" logic in 3-byte sequence processing
         [InlineData(EURO_SYMBOL + EURO_SYMBOL + EURO_SYMBOL + E_ACUTE, 4, 0)] // 3x 3-byte sequences + single 2-byte sequence, exercises "consume multiple bytes at a time" logic in 3-byte sequence processing
         [InlineData(EURO_SYMBOL + EURO_SYMBOL + E_ACUTE + E_ACUTE + E_ACUTE + E_ACUTE, 6, 0)] // 2x 3-byte sequences + 4x 2-byte sequences, exercises "consume multiple bytes at a time" logic in 3-byte sequence processing
         [InlineData(GRINNING_FACE + GRINNING_FACE, 2, 2)] // 2x 4-byte sequences, exercises 4-byte sequence processing
-        [InlineData(GRINNING_FACE + "303132", 4, 2)] // single 4-byte sequence + 3 ASCII bytes, exercises 4-byte sequence processing and draining logic
+        [InlineData(GRINNING_FACE + "303132", 4, 1)] // single 4-byte sequence + 3 ASCII bytes, exercises 4-byte sequence processing and draining logic
         [InlineData("F09FA4B8" + "F09F8FBD" + "E2808D" + "E29980" + "EFB88F", 5, 2)] // U+1F938 U+1F3FD U+200D U+2640 U+FE0F WOMAN CARTWHEELING: MEDIUM SKIN TONE, exercising switching between multiple sequence lengths
         public void GetIndexOfFirstInvalidUtf8Sequence_WithLargeValidBuffers(string input, int expectedRuneCount, int expectedSurrogatePairCount)
         {
