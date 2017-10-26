@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using FastUtf8Tester;
 using Xunit;
 
@@ -90,11 +91,249 @@ namespace Tests
             GetIndexOfFirstInvalidUtf8Sequence_Test_Core(input, -1 /* expectedRetVal */, expectedRuneCount, expectedSurrogatePairCount);
         }
 
+        [Theory]
+        [InlineData("3031" + "80" + "202122232425", 2, 2, 0)] // Continuation character at start of sequence should match no bitmask
+        [InlineData("3031" + "C080" + "2021222324", 2, 2, 0)] // Overlong 2-byte sequence at start of DWORD
+        [InlineData("3031" + "C180" + "2021222324", 2, 2, 0)] // Overlong 2-byte sequence at start of DWORD
+        [InlineData("C280" + "C180", 2, 1, 0)] // Overlong 2-byte sequence at end of DWORD
+        [InlineData("C27F" + "C280", 0, 0, 0)] // Improperly terminated 2-byte sequence at start of DWORD
+        [InlineData("C2C0" + "C280", 0, 0, 0)] // Improperly terminated 2-byte sequence at start of DWORD
+        [InlineData("C280" + "C27F", 2, 1, 0)] // Improperly terminated 2-byte sequence at end of DWORD
+        [InlineData("C280" + "C2C0", 2, 1, 0)] // Improperly terminated 2-byte sequence at end of DWORD
+        [InlineData("C280" + "C280" + "80203040", 4, 2, 0)] // Continuation character at start of sequence, within "stay in 2-byte processing" optimization
+        [InlineData("C280" + "C280" + "C180" + "C280", 4, 2, 0)] // Overlong 2-byte sequence at start of DWORD, within "stay in 2-byte processing" optimization
+        [InlineData("C280" + "C280" + "C280" + "C180", 6, 3, 0)] // Overlong 2-byte sequence at end of DWORD, within "stay in 2-byte processing" optimization
+        [InlineData("3031" + "E09F80" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Overlong 3-byte sequence at start of DWORD
+        [InlineData("3031" + "E07F80" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Improperly terminated 3-byte sequence at start of DWORD
+        [InlineData("3031" + "E0C080" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Improperly terminated 3-byte sequence at start of DWORD
+        [InlineData("3031" + "E17F80" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Improperly terminated 3-byte sequence at start of DWORD
+        [InlineData("3031" + "E1C080" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Improperly terminated 3-byte sequence at start of DWORD
+        [InlineData("3031" + "EDA080" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Surrogate 3-byte sequence at start of DWORD
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithLargeInvalidBuffers(string input, int expectedRetVal, int expectedRuneCount, int expectedSurrogatePairCount)
+        {
+            // These test cases are for the "fast processing" code which is the main loop of GetIndexOfFirstInvalidUtf8Sequence,
+            // so inputs should be less >= 4 bytes.
+
+            Assert.True(input.Length >= 8);
+
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(input, expectedRetVal, expectedRuneCount, expectedSurrogatePairCount);
+        }
+
+        [Fact]
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithOverlongTwoByteSequences_ReturnsInvalid()
+        {
+            // [ C0 ] is never a valid byte, indicates overlong 2-byte sequence
+            // We'll test that [ C0 ] [ 00..FF ] is treated as invalid
+
+            for (int i = 0; i < 256; i++)
+            {
+                AssertIsInvalidTwoByteSequence(new byte[] { 0xC0, (byte)i });
+            }
+
+            // [ C1 ] is never a valid byte, indicates overlong 2-byte sequence
+            // We'll test that [ C1 ] [ 00..FF ] is treated as invalid
+
+            for (int i = 0; i < 256; i++)
+            {
+                AssertIsInvalidTwoByteSequence(new byte[] { 0xC1, (byte)i });
+            }
+        }
+
+        [Fact]
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithImproperlyTerminatedTwoByteSequences_ReturnsInvalid()
+        {
+            // Test [ C2..DF ] [ 00..7F ] and [ C2..DF ] [ C0..FF ]
+
+            for (int i = 0xC2; i < 0xDF; i++)
+            {
+                for (int j = 0; j < 0x80; j++)
+                {
+                    AssertIsInvalidTwoByteSequence(new byte[] { (byte)i, (byte)j });
+                }
+                for (int j = 0xC0; j < 0x100; j++)
+                {
+                    AssertIsInvalidTwoByteSequence(new byte[] { (byte)i, (byte)j });
+                }
+            }
+        }
+
+        [Fact]
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithOverlongThreeByteSequences_ReturnsInvalid()
+        {
+            // [ E0 ] [ 80..9F ] [ 80..BF ] is overlong 3-byte sequence
+
+            for (int i = 0x00; i < 0xA0; i++)
+            {
+                AssertIsInvalidThreeByteSequence(new byte[] { 0xE0, (byte)i, 0x80 });
+            }
+        }
+
+        [Fact]
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithSurrogateThreeByteSequences_ReturnsInvalid()
+        {
+            // [ ED ] [ A0..BF ] [ 80..BF ] is surrogate 3-byte sequence
+
+            for (int i = 0xA0; i < 0x100; i++)
+            {
+                AssertIsInvalidThreeByteSequence(new byte[] { 0xED, (byte)i, 0x80 });
+            }
+        }
+
+        [Fact]
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithImproperlyTerminatedThreeByteSequence_ReturnsInvalid()
+        {
+            // [ E0..EF ] [ 80..BF ] [ !(80..BF) ] is improperly terminated 3-byte sequence
+
+            for (int i = 0xE0; i < 0xF0; i++)
+            {
+                for (int j = 0x00; j < 0x80; j++)
+                {
+                    // Use both '9F' and 'A0' to make sure at least one isn't caught by overlong / surrogate checks
+                    AssertIsInvalidThreeByteSequence(new byte[] { (byte)i, 0x9F, (byte)j });
+                    AssertIsInvalidThreeByteSequence(new byte[] { (byte)i, 0xA0, (byte)j });
+                }
+                for (int j = 0xC0; j < 0x100; j++)
+                {
+                    // Use both '9F' and 'A0' to make sure at least one isn't caught by overlong / surrogate checks
+                    AssertIsInvalidThreeByteSequence(new byte[] { (byte)i, 0x9F, (byte)j });
+                    AssertIsInvalidThreeByteSequence(new byte[] { (byte)i, 0xA0, (byte)j });
+                }
+            }
+        }
+
+        [Fact]
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithOverlongFourByteSequences_ReturnsInvalid()
+        {
+            // [ F0 ] [ 80..8F ] [ 80..BF ] [ 80..BF ] is overlong 4-byte sequence
+
+            for (int i = 0x00; i < 0x90; i++)
+            {
+                AssertIsInvalidFourByteSequence(new byte[] { 0xF0, (byte)i, 0x80, 0x80 });
+            }
+        }
+
+        [Fact]
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithOutOfRangeFourByteSequences_ReturnsInvalid()
+        {
+            // [ F4 ] [ 90..BF ] [ 80..BF ] [ 80..BF ] is out-of-range 4-byte sequence
+
+            for (int i = 0x90; i < 0x100; i++)
+            {
+                AssertIsInvalidFourByteSequence(new byte[] { 0xF4, (byte)i, 0x80, 0x80 });
+            }
+        }
+
+        [Fact]
+        public void GetIndexOfFirstInvalidUtf8Sequence_WithInvalidFourByteSequence_ReturnsInvalid()
+        {
+            // [ F0..F4 ] [ !(80..BF) ] [ !(80..BF) ] [ !(80..BF) ] is improperly terminated 4-byte sequence
+
+            for (int i = 0xF0; i < 0xF5; i++)
+            {
+                for (int j = 0x00; j < 0x80; j++)
+                {
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, (byte)j, 0x80, 0x80 });
+
+                    // Use both '8F' and '90' to make sure at least one isn't caught by overlong / out-of-range checks
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, 0x9F, (byte)j, 0x80 });
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, 0xA0, (byte)j, 0x80 });
+
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, 0x9F, 0x80, (byte)j });
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, 0xA0, 0x80, (byte)j });
+                }
+                for (int j = 0xC0; j < 0x100; j++)
+                {
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, (byte)j, 0x80, 0x80 });
+
+                    // Use both '8F' and '90' to make sure at least one isn't caught by overlong / out-of-range checks
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, 0x9F, (byte)j, 0x80 });
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, 0xA0, (byte)j, 0x80 });
+
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, 0x9F, 0x80, (byte)j });
+                    AssertIsInvalidFourByteSequence(new byte[] { (byte)i, 0xA0, 0x80, (byte)j });
+                }
+            }
+        }
+
+        private static void AssertIsInvalidTwoByteSequence(byte[] invalidSequence)
+        {
+            Assert.Equal(2, invalidSequence.Length);
+
+            byte[] KNOWN_GOOD_BYTES = DecodeHex(E_ACUTE);
+
+            byte[] toTest = invalidSequence.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // at start of first DWORD
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 0, 0, 0);
+
+            toTest = KNOWN_GOOD_BYTES.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // at end of first DWORD
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 2, 1, 0);
+
+            // Run the same tests but with extra data at the beginning so that we're inside one of
+            // the 2-byte processing "hot loop" code paths.
+
+            toTest = KNOWN_GOOD_BYTES.Concat(KNOWN_GOOD_BYTES).Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // at start of next DWORD
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 4, 2, 0);
+
+            toTest = KNOWN_GOOD_BYTES.Concat(KNOWN_GOOD_BYTES).Concat(KNOWN_GOOD_BYTES).Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // at end of next DWORD
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 6, 3, 0);
+        }
+
+        private static void AssertIsInvalidThreeByteSequence(byte[] invalidSequence)
+        {
+            Assert.Equal(3, invalidSequence.Length);
+
+            byte[] KNOWN_GOOD_BYTES = DecodeHex(EURO_SYMBOL);
+
+            byte[] toTest = invalidSequence.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // at start of first DWORD
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 0, 0, 0);
+
+            // Run the same tests but with extra data at the beginning so that we're inside one of
+            // the 3-byte processing "hot loop" code paths.
+
+            toTest = KNOWN_GOOD_BYTES.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // straddling first and second DWORDs
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 3, 1, 0);
+
+            toTest = KNOWN_GOOD_BYTES.Concat(KNOWN_GOOD_BYTES).Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // straddling second and third DWORDs
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 6, 2, 0);
+
+            toTest = KNOWN_GOOD_BYTES.Concat(KNOWN_GOOD_BYTES).Concat(KNOWN_GOOD_BYTES).Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // at end of third DWORD
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 9, 3, 0);
+        }
+
+        private static void AssertIsInvalidFourByteSequence(byte[] invalidSequence)
+        {
+            Assert.Equal(4, invalidSequence.Length);
+
+            byte[] KNOWN_GOOD_BYTES = DecodeHex(GRINNING_FACE);
+
+            byte[] toTest = invalidSequence.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray();
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 0, 0, 0);
+
+            toTest = KNOWN_GOOD_BYTES.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray();
+            GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 4, 1, 1);
+        }
+
         private static void GetIndexOfFirstInvalidUtf8Sequence_Test_Core(string inputHex, int expectedRetVal, int expectedRuneCount, int expectedSurrogatePairCount)
         {
             // Arrange
 
             var inputBytes = NativeMemory.GetProtectedReadonlyBuffer(DecodeHex(inputHex));
+
+            // Act
+
+            var indexOfFirstInvalidChar = Utf8UtilForTest.GetIndexOfFirstInvalidUtf8Sequence(inputBytes, out int actualRuneCount, out int actualSurrogatePairCount);
+
+            // Assert
+
+            Assert.Equal(expectedRetVal, indexOfFirstInvalidChar);
+            Assert.Equal(expectedRuneCount, actualRuneCount);
+            Assert.Equal(expectedSurrogatePairCount, actualSurrogatePairCount);
+        }
+
+        private static void GetIndexOfFirstInvalidUtf8Sequence_Test_Core(byte[] input, int expectedRetVal, int expectedRuneCount, int expectedSurrogatePairCount)
+        {
+            // Arrange
+
+            var inputBytes = NativeMemory.GetProtectedReadonlyBuffer(input);
 
             // Act
 
