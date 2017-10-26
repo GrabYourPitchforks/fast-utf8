@@ -177,30 +177,36 @@ namespace FastUtf8Tester
 
                         // We also know that there's enough room to read at least four DWORDs from the stream.
 
+                        IntPtr inputBufferOriginalOffset = inputBufferCurrentOffset;
+                        IntPtr inputBufferFinalOffsetAtWhichCanSafelyLoop = (IntPtr)(inputLength - 4 * sizeof(uint));
                         do
                         {
                             ref uint currentReadPosition = ref Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
 
                             if (!Utf8DWordAllBytesAreAscii(currentReadPosition | Unsafe.Add(ref currentReadPosition, 1)))
                             {
-                                inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset + 2 * sizeof(uint);
-                                goto BeforeReadDWord;
+                                goto AdjustUnrollingIndexDueToNonAsciiData;
                             }
 
                             if (!Utf8DWordAllBytesAreAscii(Unsafe.Add(ref currentReadPosition, 2) | Unsafe.Add(ref currentReadPosition, 3)))
                             {
                                 inputBufferCurrentOffset += 2 * sizeof(uint);
-                                inputBufferRemainingBytes -= 2 * sizeof(uint);
-
-                                // Need to fudge the 'offset at which to allow unrolling' number so we don't cause
-                                // the next iteration to cause a buffer overrun.
-                                inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 2 * sizeof(uint), inputLength - 2 * sizeof(uint));
-                                goto BeforeReadDWord;
+                                goto AdjustUnrollingIndexDueToNonAsciiData;
                             }
 
                             inputBufferCurrentOffset += 4 * sizeof(uint);
-                            inputBufferRemainingBytes -= 4 * sizeof(uint);
-                        } while (inputBufferRemainingBytes >= 4 * sizeof(uint));
+                        } while (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, inputBufferFinalOffsetAtWhichCanSafelyLoop));
+
+                        inputBufferRemainingBytes -= (IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) - IntPtrToInt32NoOverflowCheck(inputBufferOriginalOffset));
+                        continue; // go back to beginning of main loop to check for more data
+
+                        AdjustUnrollingIndexDueToNonAsciiData:
+
+                        // Need to fudge the 'offset at which to allow unrolling' number so we don't cause
+                        // the next iteration to cause a buffer overrun.
+                        inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 2 * sizeof(uint), inputLength - 2 * sizeof(uint));
+                        inputBufferRemainingBytes -= (IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) - IntPtrToInt32NoOverflowCheck(inputBufferOriginalOffset));
+                        goto BeforeReadDWord;
                     }
 
                     continue;
