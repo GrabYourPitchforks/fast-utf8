@@ -8,7 +8,7 @@ namespace FastUtf8Tester
     class Program
     {
         private const int BATT_COUNT = 5;
-        private const int NUM_ITERS = 1_000_000;
+        private const int NUM_ITERS = 10_000;
 
         static void Main(string[] args)
         {
@@ -21,21 +21,21 @@ namespace FastUtf8Tester
             while (true)
             {
                 Console.WriteLine("Select text:");
-                Console.WriteLine("1. English");
-                Console.WriteLine("2. Hebrew (2-byte chars)");
-                Console.WriteLine("3. Chinese (3-byte chars)");
-                Console.WriteLine("4. Russian (2-byte chars)");
-                Console.WriteLine("5. Japanese (3-byte chars)");
+                Console.WriteLine("1. English (ASCII)");
+                Console.WriteLine("2. English (UTF8)");
+                Console.WriteLine("3. Russian (2-byte chars)");
+                Console.WriteLine("4. Greek (2-byte chars)");
+                Console.WriteLine("5. Chinese (3-byte chars)");
                 Console.Write("? ");
 
                 string lipsum;
                 switch (Int32.Parse(Console.ReadLine()))
                 {
-                    case 1: { lipsum = Lipsum.English; break; }
-                    case 2: { lipsum = Lipsum.Hebrew; break; }
-                    case 3: { lipsum = Lipsum.Chinese; break; }
-                    case 4: { lipsum = Lipsum.Russian; break; }
-                    case 5: { lipsum = Lipsum.Japanese; break; }
+                    case 1: { lipsum = SampleTexts.English_Ascii; break; }
+                    case 2: { lipsum = SampleTexts.English_Utf8; break; }
+                    case 3: { lipsum = SampleTexts.Russian; break; }
+                    case 4: { lipsum = SampleTexts.Greek; break; }
+                    case 5: { lipsum = SampleTexts.Chinese; break; }
                     default: { return; }
                 }
                 Console.WriteLine();
@@ -66,6 +66,7 @@ namespace FastUtf8Tester
             byte[] asBytes = Encoding.UTF8.GetBytes(lipsum);
             char[] asChars = new char[Encoding.UTF8.GetCharCount(asBytes)];
 
+            Console.WriteLine(Encoding.UTF8.GetCharCount(asBytes));
             Encoding.UTF8.GetString(asBytes); // don't use return value, simply to ensure method is JITted
 
             var stopwatch = new Stopwatch();
@@ -75,7 +76,7 @@ namespace FastUtf8Tester
                 stopwatch.Restart();
                 for (int j = 0; j < NUM_ITERS; j++)
                 {
-                    Encoding.UTF8.GetChars(asBytes, asChars);
+                    Encoding.UTF8.GetCharCount(asBytes);
                 }
                 Console.WriteLine($"Elapsed: {stopwatch.Elapsed}");
             }
@@ -86,10 +87,11 @@ namespace FastUtf8Tester
             byte[] asBytes = Encoding.UTF8.GetBytes(lipsum);
             char[] asChars = new char[Encoding.UTF8.GetCharCount(asBytes)];
 
-            Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
+            Console.WriteLine(Utf8Util.GetUtf16CharCount(asBytes));
+             Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
             if (new String(asChars) != lipsum)
             {
-                throw new Exception("Didn't decode properly!");
+            //    throw new Exception("Didn't decode properly!");
             }
             Array.Clear(asChars, 0, asChars.Length);
 
@@ -100,7 +102,7 @@ namespace FastUtf8Tester
                 stopwatch.Restart();
                 for (int j = 0; j < NUM_ITERS; j++)
                 {
-                    Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
+                    Utf8Util.GetUtf16CharCount(asBytes);
                 }
                 Console.WriteLine($"Elapsed: {stopwatch.Elapsed}");
             }
