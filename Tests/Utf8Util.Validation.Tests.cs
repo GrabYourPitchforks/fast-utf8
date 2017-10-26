@@ -109,6 +109,17 @@ namespace Tests
         [InlineData("3031" + "E17F80" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Improperly terminated 3-byte sequence at start of DWORD
         [InlineData("3031" + "E1C080" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Improperly terminated 3-byte sequence at start of DWORD
         [InlineData("3031" + "EDA080" + EURO_SYMBOL + EURO_SYMBOL, 2, 2, 0)] // Surrogate 3-byte sequence at start of DWORD
+        [InlineData("3031" + "F5808080", 2, 2, 0)] // [ F5 ] is always invalid
+        [InlineData("3031" + "F6808080", 2, 2, 0)] // [ F6 ] is always invalid
+        [InlineData("3031" + "F7808080", 2, 2, 0)] // [ F7 ] is always invalid
+        [InlineData("3031" + "F8808080", 2, 2, 0)] // [ F8 ] is always invalid
+        [InlineData("3031" + "F9808080", 2, 2, 0)] // [ F9 ] is always invalid
+        [InlineData("3031" + "FA808080", 2, 2, 0)] // [ FA ] is always invalid
+        [InlineData("3031" + "FB808080", 2, 2, 0)] // [ FB ] is always invalid
+        [InlineData("3031" + "FC808080", 2, 2, 0)] // [ FC ] is always invalid
+        [InlineData("3031" + "FD808080", 2, 2, 0)] // [ FD ] is always invalid
+        [InlineData("3031" + "FE808080", 2, 2, 0)] // [ FE ] is always invalid
+        [InlineData("3031" + "FF808080", 2, 2, 0)] // [ FF ] is always invalid
         public void GetIndexOfFirstInvalidUtf8Sequence_WithLargeInvalidBuffers(string input, int expectedRetVal, int expectedRuneCount, int expectedSurrogatePairCount)
         {
             // These test cases are for the "fast processing" code which is the main loop of GetIndexOfFirstInvalidUtf8Sequence,
