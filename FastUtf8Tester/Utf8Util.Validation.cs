@@ -225,6 +225,8 @@ namespace FastUtf8Tester
                     // on how many ASCII bytes have been seen so far. Then we accumulate all of the
                     // results to calculate how many ASCII bytes we can strip off at once.
 
+                    // TODO: BMI support
+
                     thisDWord = ~thisDWord; // OK to mutate this local since we're about to re-read it
                     uint firstByteIsAscii = (thisDWord >>= 7) & 1;
                     uint numAsciiBytes = firstByteIsAscii;
