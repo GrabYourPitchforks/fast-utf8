@@ -232,7 +232,7 @@ namespace FastUtf8Tester
                     uint firstTwoBytesAreAscii = firstByteIsAscii & (thisDWord >>= 8);
                     numAsciiBytes += firstTwoBytesAreAscii;
 
-                    uint firstThreeBytesAreAscii = firstTwoBytesAreAscii & (thisDWord >> 8);
+                    uint firstThreeBytesAreAscii = firstTwoBytesAreAscii & (thisDWord >>= 8);
                     numAsciiBytes += firstThreeBytesAreAscii;
 
                     inputBufferCurrentOffset += (int)numAsciiBytes;
