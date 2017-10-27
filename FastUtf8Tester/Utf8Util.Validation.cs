@@ -221,21 +221,25 @@ namespace FastUtf8Tester
 
                 if (BitConverter.IsLittleEndian)
                 {
-                    // The 'firstXyzBytesAreAscii' DWORDs use bit twiddling to hold a 1 or a 0 depending
-                    // on how many ASCII bytes have been seen so far. Then we accumulate all of the
+                    // The 'allBytesUpToNowAreAscii' DWORD uses bit twiddling to hold a 1 or a 0 depending
+                    // on whether all processed bytes were ASCII. Then we accumulate all of the
                     // results to calculate how many ASCII bytes we can strip off at once.
 
                     // TODO: BMI support
 
                     thisDWord = ~thisDWord; // OK to mutate this local since we're about to re-read it
-                    uint firstByteIsAscii = (thisDWord >>= 7) & 1;
-                    uint numAsciiBytes = firstByteIsAscii;
 
-                    uint firstTwoBytesAreAscii = firstByteIsAscii & (thisDWord >>= 8);
-                    numAsciiBytes += firstTwoBytesAreAscii;
+                    // Read first byte
+                    uint allBytesUpToNowAreAscii = (thisDWord >>= 7) & 1;
+                    uint numAsciiBytes = allBytesUpToNowAreAscii;
 
-                    uint firstThreeBytesAreAscii = firstTwoBytesAreAscii & (thisDWord >>= 8);
-                    numAsciiBytes += firstThreeBytesAreAscii;
+                    // Read second byte
+                    allBytesUpToNowAreAscii &= (thisDWord >>= 8);
+                    numAsciiBytes += allBytesUpToNowAreAscii;
+
+                    // Read third byte
+                    allBytesUpToNowAreAscii &= (thisDWord >>= 8);
+                    numAsciiBytes += allBytesUpToNowAreAscii;
 
                     inputBufferCurrentOffset += (int)numAsciiBytes;
                     inputBufferRemainingBytes -= (int)numAsciiBytes;
