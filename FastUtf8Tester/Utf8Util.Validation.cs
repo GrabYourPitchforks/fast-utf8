@@ -109,7 +109,6 @@ namespace FastUtf8Tester
                 }
             }
 
-            IntPtr inputBufferOffsetAtWhichToAllowUnrolling = IntPtr.Zero;
             int inputBufferRemainingBytes = inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
 
             // Begin the main loop.
@@ -120,8 +119,6 @@ namespace FastUtf8Tester
 
             while (inputBufferRemainingBytes >= sizeof(uint))
             {
-                BeforeReadDWord:
-
                 // Read 32 bits at a time. This is enough to hold any possible UTF8-encoded scalar.
 
                 Debug.Assert(inputLength - (int)inputBufferCurrentOffset >= sizeof(uint));
@@ -146,15 +143,10 @@ namespace FastUtf8Tester
                     // If we saw a sequence of all ASCII, there's a good chance a significant amount of following data is also ASCII.
                     // Below is basically unrolled loops with poor man's vectorization.
 
-                    if (IntPtrIsLessThan(inputBufferCurrentOffset, inputBufferOffsetAtWhichToAllowUnrolling))
+                    if (inputBufferRemainingBytes >= 5 * sizeof(uint))
                     {
-                        // We saw non-ASCII data last time we tried loop unrolling, so don't bother going
-                        // down the unrolling path again until we've bypassed that data. No need to perform
-                        // a bounds check here since we already checked the bounds as part of the loop unrolling path.
-                        goto BeforeReadDWord;
-                    }
-                    else if (inputBufferRemainingBytes >= 5 * sizeof(uint))
-                    {
+                        IntPtr inputBufferOriginalOffset = inputBufferCurrentOffset;
+
                         // The JIT produces better codegen for aligned reads than it does for
                         // unaligned reads, and we want the processor to operate at maximum
                         // efficiency in the loop that follows, so we'll align the references
@@ -172,13 +164,12 @@ namespace FastUtf8Tester
 
                             int adjustment = GetNumberOfBytesToNextDWordAlignment(ref refToCurrentDWord);
                             inputBufferCurrentOffset += adjustment;
-                            inputBufferRemainingBytes -= adjustment;
+                            // will adjust 'bytes remaining' value after below loop
                         }
-                        
+
                         // At this point, the input buffer offset points to an aligned DWORD.
                         // We also know that there's enough room to read at least four DWORDs from the stream.
 
-                        IntPtr inputBufferOriginalOffset = inputBufferCurrentOffset;
                         IntPtr inputBufferFinalOffsetAtWhichCanSafelyLoop = (IntPtr)(inputLength - 4 * sizeof(uint));
                         do
                         {
@@ -186,27 +177,36 @@ namespace FastUtf8Tester
 
                             if (!Utf8DWordAllBytesAreAscii(currentReadPosition | Unsafe.Add(ref currentReadPosition, 1)))
                             {
-                                goto AdjustUnrollingIndexDueToNonAsciiData;
+                                goto LoopTerminatedEarlyDueToNonAsciiData;
                             }
 
                             if (!Utf8DWordAllBytesAreAscii(Unsafe.Add(ref currentReadPosition, 2) | Unsafe.Add(ref currentReadPosition, 3)))
                             {
                                 inputBufferCurrentOffset += 2 * sizeof(uint);
-                                goto AdjustUnrollingIndexDueToNonAsciiData;
+                                goto LoopTerminatedEarlyDueToNonAsciiData;
                             }
 
                             inputBufferCurrentOffset += 4 * sizeof(uint);
                         } while (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, inputBufferFinalOffsetAtWhichCanSafelyLoop));
 
                         inputBufferRemainingBytes -= (IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) - IntPtrToInt32NoOverflowCheck(inputBufferOriginalOffset));
-                        continue; // go back to beginning of main loop to check for more data
+                        continue; // no guarantees about how many bytes remain; jump back to start of loop to perform length check
 
-                        AdjustUnrollingIndexDueToNonAsciiData:
+                        LoopTerminatedEarlyDueToNonAsciiData:
 
-                        // Need to fudge the 'offset at which to allow unrolling' number so we don't cause a buffer overrun in a future iteration.
-                        inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 2 * sizeof(uint), inputLength - sizeof(uint));
+                        // We know that there's *at least* two DWORDs of data remaining in the buffer.
+                        // We also know that one of them (or both of them) contains non-ASCII data somewhere.
+                        // Let's perform a quick check here to bypass the logic at the beginning of the main loop.
+
+                        thisDWord = Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        if (Utf8DWordAllBytesAreAscii(thisDWord))
+                        {
+                            inputBufferCurrentOffset += 4;
+                            thisDWord = Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        }
+
                         inputBufferRemainingBytes -= (IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) - IntPtrToInt32NoOverflowCheck(inputBufferOriginalOffset));
-                        goto BeforeReadDWord;
+                        goto AfterReadDWordSkipAllBytesAsciiCheck;
                     }
 
                     continue;
