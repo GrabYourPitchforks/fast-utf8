@@ -219,22 +219,70 @@ namespace FastUtf8Tester
                 // Next, try stripping off ASCII bytes one at a time.
                 // We only handle up to three ASCII bytes here since we handled the four ASCII byte case above.
 
-                uint numAsciiBytes = ~(thisDWord >>= 7) & 1;
-                numAsciiBytes += ~(thisDWord >>= 8) & numAsciiBytes;
-                numAsciiBytes += ~(thisDWord >> 8) & (numAsciiBytes >> 1);
-
-                inputBufferCurrentOffset += (int)numAsciiBytes;
-                inputBufferRemainingBytes -= (int)numAsciiBytes;
-
-                if (inputBufferRemainingBytes < sizeof(uint))
+                if (BitConverter.IsLittleEndian)
                 {
-                    goto ProcessRemainingBytesSlow; // Input buffer doesn't contain enough data to read a DWORD
+                    // The 'firstXyzBytesAreAscii' DWORDs use bit twiddling to hold a 1 or a 0 depending
+                    // on how many ASCII bytes have been seen so far. Then we accumulate all of the
+                    // results to calculate how many ASCII bytes we can strip off at once.
+
+                    thisDWord = ~thisDWord; // OK to mutate this local since we're about to re-read it
+                    uint firstByteIsAscii = (thisDWord >>= 7) & 1;
+                    uint numAsciiBytes = firstByteIsAscii;
+
+                    uint firstTwoBytesAreAscii = firstByteIsAscii & (thisDWord >>= 8);
+                    numAsciiBytes += firstTwoBytesAreAscii;
+
+                    uint firstThreeBytesAreAscii = firstTwoBytesAreAscii & (thisDWord >> 8);
+                    numAsciiBytes += firstThreeBytesAreAscii;
+
+                    inputBufferCurrentOffset += (int)numAsciiBytes;
+                    inputBufferRemainingBytes -= (int)numAsciiBytes;
+
+                    if (inputBufferRemainingBytes < sizeof(uint))
+                    {
+                        goto ProcessRemainingBytesSlow; // Input buffer doesn't contain enough data to read a DWORD
+                    }
+                    else
+                    {
+                        // The input buffer at the current offset contains a non-ASCII byte.
+                        // Read an entire DWORD and fall through to multi-byte consumption logic.
+                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                    }
                 }
                 else
                 {
-                    // The input buffer at the current offset contains a non-ASCII byte.
-                    // Read an entire DWORD and fall through to multi-byte consumption logic.
-                    thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                    if (Utf8DWordFirstByteIsAscii(thisDWord))
+                    {
+                        if (Utf8DWordSecondByteIsAscii(thisDWord))
+                        {
+                            if (Utf8DWordThirdByteIsAscii(thisDWord))
+                            {
+                                inputBufferCurrentOffset += 3;
+                                inputBufferRemainingBytes -= 3;
+                            }
+                            else
+                            {
+                                inputBufferCurrentOffset += 2;
+                                inputBufferRemainingBytes -= 2;
+                            }
+                        }
+                        else
+                        {
+                            inputBufferCurrentOffset += 1;
+                            inputBufferRemainingBytes--;
+                        }
+
+                        if (inputBufferRemainingBytes < sizeof(uint))
+                        {
+                            goto ProcessRemainingBytesSlow; // Input buffer doesn't contain enough data to read a DWORD
+                        }
+                        else
+                        {
+                            // The input buffer at the current offset contains a non-ASCII byte.
+                            // Read an entire DWORD and fall through to multi-byte consumption logic.
+                            thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        }
+                    }
                 }
 
                 // At this point, we know we're working with a multi-byte code unit,
