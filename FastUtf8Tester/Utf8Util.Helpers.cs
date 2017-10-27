@@ -7,10 +7,8 @@ namespace FastUtf8Tester
     internal static partial class Utf8Util
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static unsafe int GetNumBytesToFlushForDWordAlignment(ref byte reference)
-        {
-            return (-(int)Unsafe.AsPointer(ref reference)) & 0x3;
-        }
+        private static unsafe int GetNumberOfBytesToNextDWordAlignment(ref byte @ref)
+            => (int)((uint)sizeof(uint) - ((uint)Unsafe.AsPointer(ref @ref) % sizeof(uint)));
 
         // Assuming 'buffer' points to the start of an invalid sequence, returns the length (in bytes)
         // of the invalid sequence.

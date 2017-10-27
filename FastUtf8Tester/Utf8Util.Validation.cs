@@ -153,28 +153,29 @@ namespace FastUtf8Tester
                         // a bounds check here since we already checked the bounds as part of the loop unrolling path.
                         goto BeforeReadDWord;
                     }
-                    else if (inputBufferRemainingBytes >= 3 + 4 * sizeof(uint))
+                    else if (inputBufferRemainingBytes >= 5 * sizeof(uint))
                     {
+                        // The JIT produces better codegen for aligned reads than it does for
+                        // unaligned reads, and we want the processor to operate at maximum
+                        // efficiency in the loop that follows, so we'll align the references
+                        // now. It's OK to do this without pinning because the GC will never
+                        // move a heap-allocated object in a manner that messes with its
+                        // alignment.
+
                         {
-                            ref byte refToNextDWord = ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset);
-                            int numBytesToConsumeUntilAligned = GetNumBytesToFlushForDWordAlignment(ref refToNextDWord);
-                            if (numBytesToConsumeUntilAligned > 0)
+                            ref byte refToCurrentDWord = ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset);
+                            thisDWord = Unsafe.ReadUnaligned<uint>(ref refToCurrentDWord);
+                            if (!Utf8DWordAllBytesAreAscii(thisDWord))
                             {
-                                thisDWord = Unsafe.ReadUnaligned<uint>(ref refToNextDWord); // don't care about flushing out byte-by-byte, just try to read all at once
-                                if (!Utf8DWordAllBytesAreAscii(thisDWord))
-                                {
-                                    goto AfterReadDWordSkipAllBytesAsciiCheck;
-                                }
-
-                                inputBufferCurrentOffset += numBytesToConsumeUntilAligned;
-                                inputBufferRemainingBytes -= numBytesToConsumeUntilAligned;
+                                goto AfterReadDWordSkipAllBytesAsciiCheck;
                             }
+
+                            int adjustment = GetNumberOfBytesToNextDWordAlignment(ref refToCurrentDWord);
+                            inputBufferCurrentOffset += adjustment;
+                            inputBufferRemainingBytes -= adjustment;
                         }
-
+                        
                         // At this point, the input buffer offset points to an aligned DWORD.
-                        // This will remain true even if the GC moves things around, as the GC will never change the
-                        // alignment of data that it moves.
-
                         // We also know that there's enough room to read at least four DWORDs from the stream.
 
                         IntPtr inputBufferOriginalOffset = inputBufferCurrentOffset;
@@ -202,9 +203,8 @@ namespace FastUtf8Tester
 
                         AdjustUnrollingIndexDueToNonAsciiData:
 
-                        // Need to fudge the 'offset at which to allow unrolling' number so we don't cause
-                        // the next iteration to cause a buffer overrun.
-                        inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 2 * sizeof(uint), inputLength - 2 * sizeof(uint));
+                        // Need to fudge the 'offset at which to allow unrolling' number so we don't cause a buffer overrun in a future iteration.
+                        inputBufferOffsetAtWhichToAllowUnrolling = (IntPtr)Math.Min(IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) + 2 * sizeof(uint), inputLength - sizeof(uint));
                         inputBufferRemainingBytes -= (IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) - IntPtrToInt32NoOverflowCheck(inputBufferOriginalOffset));
                         goto BeforeReadDWord;
                     }
