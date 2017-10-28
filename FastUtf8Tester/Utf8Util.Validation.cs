@@ -94,17 +94,17 @@ namespace FastUtf8Tester
                 if (IntPtr.Size >= 8)
                 {
                     // Test first 16 bytes and check for all-ASCII.
-                    if ((inputLength >= 2 * sizeof(ulong) + 2 * Vector<byte>.Count) && Utf8QWordAllBytesAreAscii(ReadAndFoldTwoQWords(ref inputBuffer)))
+                    if ((inputLength >= 2 * sizeof(ulong) + 3 * Vector<byte>.Count) && Utf8QWordAllBytesAreAscii(ReadAndFoldTwoQWords(ref inputBuffer)))
                     {
-                        inputBufferCurrentOffset = (IntPtr)(2 * sizeof(ulong) + ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(ulong)), inputLength - 2 * sizeof(ulong)));
+                        inputBufferCurrentOffset = ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(ulong)), inputLength - 2 * sizeof(ulong)) + 2 * sizeof(ulong);
                     }
                 }
                 else
                 {
                     // Test first 8 bytes and check for all-ASCII.
-                    if ((inputLength >= 2 * sizeof(uint) + 2 * Vector<byte>.Count) && Utf8DWordAllBytesAreAscii(ReadAndFoldTwoDWords(ref inputBuffer)))
+                    if ((inputLength >= 2 * sizeof(uint) + 3 * Vector<byte>.Count) && Utf8DWordAllBytesAreAscii(ReadAndFoldTwoDWords(ref inputBuffer)))
                     {
-                        inputBufferCurrentOffset = (IntPtr)(2 * sizeof(uint) + ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(uint)), inputLength - 2 * sizeof(uint)));
+                        inputBufferCurrentOffset = ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(uint)), inputLength - 2 * sizeof(uint)) + 2 * sizeof(uint);
                     }
                 }
             }
@@ -683,85 +683,69 @@ namespace FastUtf8Tester
         // later in the sequence or because we're running out of input to search. The intent is that the caller *skips over*
         // the number of bytes returned by this method, then it continues data processing from the next byte.
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static unsafe int ConsumeAsciiBytesVectorized(ref byte buffer, int length)
+        private static unsafe IntPtr ConsumeAsciiBytesVectorized(ref byte buffer, int length)
         {
-            // Only allow vectorization if vector operations are hardware-accelerated
-            // and vectors are at least 128 bits in length.
-            if (Vector.IsHardwareAccelerated && (Vector<byte>.Count >= 2 * sizeof(ulong)))
+            // Only allow vectorization if vectors are hardware-accelerated and we have enough
+            // data to allow a vectorized search.
+
+            if (!Vector.IsHardwareAccelerated || length < 3 * Vector<byte>.Count)
             {
-                // Need to pin buffer so the GC doesn't cause it to be misaligned when we're
-                // reading vectors from it.
-                fixed (byte* pbBuffer = &buffer)
-                {
-                    int offsetAtWhichVectorIsAligned;
-                    {
-                        int referenceMisalignment = (int)pbBuffer % Vector<byte>.Count;
-                        offsetAtWhichVectorIsAligned = (referenceMisalignment == 0) ? 0 : (Vector<byte>.Count - referenceMisalignment);
-                    }
-
-                    if (length - offsetAtWhichVectorIsAligned < (Vector<byte>.Count * 2))
-                    {
-                        // After alignment there's not enough data left over to warrant setting
-                        // up the vectorization code path.
-                        return 0;
-                    }
-
-                    int numBytesConsumed = 0;
-
-                    // Consume QWORDs or DWORDs until we're aligned with where we can start vectorization.
-                    // It's ok if we duplicate a little bit of work by having a single QWORD or DWORD read
-                    // overlap with the vector read area. It's not worth the overhead of checking for this
-                    // condition and avoiding the duplicate work.
-
-                    if (IntPtr.Size >= sizeof(ulong))
-                    {
-                        while (numBytesConsumed < offsetAtWhichVectorIsAligned)
-                        {
-                            if (!Utf8QWordAllBytesAreAscii(Unsafe.ReadUnaligned<ulong>(&pbBuffer[numBytesConsumed])))
-                            {
-                                return numBytesConsumed; // found a high bit set somewhere
-                            }
-                            numBytesConsumed += sizeof(ulong);
-                        }
-                    }
-                    else
-                    {
-                        while (numBytesConsumed < offsetAtWhichVectorIsAligned)
-                        {
-                            if (!Utf8DWordAllBytesAreAscii(Unsafe.ReadUnaligned<uint>(&pbBuffer[numBytesConsumed])))
-                            {
-                                return numBytesConsumed; // found a high bit set somewhere
-                            }
-                            numBytesConsumed += sizeof(uint);
-                        }
-                    }
-
-                    // At this point, we're potentially past where we know we can begin a fast
-                    // vectorized search, so let's start from the proper aligned offset.
-
-                    numBytesConsumed = offsetAtWhichVectorIsAligned;
-
-                    var highBitMask = new Vector<byte>(0x80);
-                    do
-                    {
-                        // Read two vector lines at a time.
-
-                        Debug.Assert(length - numBytesConsumed >= 2 * Vector<byte>.Count); // Invariant should've been checked earlier, we need enough room to read data
-
-                        if (((Unsafe.Read<Vector<byte>>(&pbBuffer[numBytesConsumed]) | Unsafe.Read<Vector<byte>>(&pbBuffer[numBytesConsumed + Vector<byte>.Count])) & highBitMask) != Vector<byte>.Zero)
-                        {
-                            break; // found a non-ascii character somewhere in this vector
-                        }
-
-                        numBytesConsumed += 2 * Vector<byte>.Count;
-                    } while (length - numBytesConsumed >= 2 * Vector<byte>.Count);
-
-                    return numBytesConsumed;
-                }
+                return IntPtr.Zero;
             }
-            else
+
+            // JITter will generate VMOVUPD instructions, which performs better when the memory to read
+            // is aligned. The GC may move the buffer around in memory, and while it will never cause
+            // moved data to be misaligned with respect to the natural word size, no such guarantee is
+            // made with respect to SIMD vector alignment. We'll pin the buffer so that we can enforce
+            // alignment manually.
+
+            fixed (byte* pbBuffer = &buffer)
             {
-                return 0; // can't vectorize the search
+                // [Potentially unaligned] single SIMD read and comparison, quick check for non-ASCII data.
+
+                Vector<byte> mask = new Vector<byte>((byte)0x80);
+                if ((Unsafe.ReadUnaligned<Vector<byte>>(pbBuffer) & mask) != Vector<byte>.Zero)
+                {
+                    return IntPtr.Zero;
+                }
+
+                // Round 'pbBuffer' up to the *next* aligned address. If 'pbBuffer' was already aligned, this
+                // just bumps the address up to the next vector. The read above guaranteed that we read all
+                // data between 'pbBuffer' and 'pbAlignedBuffer' and checked it for non-ASCII bytes. It's
+                // possible we'll duplicate a little bit of work if 'pbBuffer' wasn't already aligned since
+                // its tail end may overlap with the immediate upcoming aligned read, but it's faster just to
+                // perform the extra work and not worry about checking for this condition.
+
+                // 'pbAlignedBuffer' will be somewhere between 1 and Vector<byte>.Count bytes ahead of 'pbBuffer',
+                // hence the check for a length of >= 3 * Vector<byte>.Count at the beginning of this method.
+
+                byte* pbAlignedBuffer;
+                if (IntPtr.Size >= 8)
+                {
+                    pbAlignedBuffer = (byte*)(((long)pbBuffer + Vector<byte>.Count) & ~((long)Vector<byte>.Count - 1));
+                }
+                else
+                {
+                    pbAlignedBuffer = (byte*)(((int)pbBuffer + Vector<byte>.Count) & ~((int)Vector<byte>.Count - 1));
+                }
+
+                // Now iterate and read two aligned SIMD vectors at a time. We can skip the first length check on the
+                // first iteration of the loop since we already performed a length check at the very beginning of this
+                // method.
+
+                byte* pbFinalPosAtWhichCanReadTwoVectors = &pbBuffer[length - 2 * Vector<byte>.Count];
+                Debug.Assert(pbFinalPosAtWhichCanReadTwoVectors - pbAlignedBuffer <= 2 * Vector<byte>.Count);
+
+                do
+                {
+                    if (((Unsafe.Read<Vector<byte>>(pbAlignedBuffer) | Unsafe.Read<Vector<byte>>(pbAlignedBuffer + Vector<byte>.Count)) & mask) != Vector<byte>.Zero)
+                    {
+                        break; // non-ASCII data incoming
+                    }
+                } while ((pbAlignedBuffer += 2 * Vector<byte>.Count) <= pbFinalPosAtWhichCanReadTwoVectors);
+
+                // We consumed all data up to 'pbAlignedBuffer' and know it to be non-ASCII.
+                return (IntPtr)(pbAlignedBuffer - pbBuffer);
             }
         }
     }
