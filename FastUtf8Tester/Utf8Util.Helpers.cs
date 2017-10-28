@@ -6,6 +6,56 @@ namespace FastUtf8Tester
 {
     internal static partial class Utf8Util
     {
+        // JITter is smart enough to turn this into ROL / ROR instruction
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint ROL32(uint value, int shift)
+            => (value << shift) | (value >> (32 - shift));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint CountNumberOfLeadingAsciiBytesUpToThree(uint value)
+        {
+            // TODO: BMI & TZCNT support as optimization
+
+            // The 'allBytesUpToNowAreAscii' DWORD uses bit twiddling to hold a 1 or a 0 depending
+            // on whether all processed bytes were ASCII. Then we accumulate all of the
+            // results to calculate how many ASCII bytes we can strip off at once.
+
+            value = ~value;
+
+            if (BitConverter.IsLittleEndian)
+            {
+                // Read first byte
+                uint allBytesUpToNowAreAscii = (value >>= 7) & 1;
+                uint numAsciiBytes = allBytesUpToNowAreAscii;
+
+                // Read second byte
+                allBytesUpToNowAreAscii &= (value >>= 8);
+                numAsciiBytes += allBytesUpToNowAreAscii;
+
+                // Read third byte
+                allBytesUpToNowAreAscii &= (value >>= 8);
+                numAsciiBytes += allBytesUpToNowAreAscii;
+
+                return numAsciiBytes;
+            }
+            else
+            {
+                // Read first byte
+                uint allBytesUpToNowAreAscii = (value = ROL32(value, 1)) & 1;
+                uint numAsciiBytes = allBytesUpToNowAreAscii;
+
+                // Read second byte
+                allBytesUpToNowAreAscii &= (value = ROL32(value, 8));
+                numAsciiBytes += allBytesUpToNowAreAscii;
+
+                // Read third byte
+                allBytesUpToNowAreAscii &= (value = ROL32(value, 8));
+                numAsciiBytes += allBytesUpToNowAreAscii;
+
+                return numAsciiBytes;
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static unsafe int GetNumberOfBytesToNextDWordAlignment(ref byte @ref)
             => (int)((uint)sizeof(uint) - ((uint)Unsafe.AsPointer(ref @ref) % sizeof(uint)));
