@@ -190,7 +190,7 @@ namespace FastUtf8Tester
                         } while (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, inputBufferFinalOffsetAtWhichCanSafelyLoop));
 
                         inputBufferRemainingBytes -= (IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) - IntPtrToInt32NoOverflowCheck(inputBufferOriginalOffset));
-                        continue; // no guarantees about how many bytes remain; jump back to start of loop to perform length check
+                        continue; // need to perform a bounds check because we might be running out of data
 
                         LoopTerminatedEarlyDueToNonAsciiData:
 
@@ -362,7 +362,7 @@ namespace FastUtf8Tester
                     {
                         inputBufferCurrentOffset += 2;
                         inputBufferRemainingBytes -= 2;
-                        tempRuneCount--; // 2-byte sequence -> 1 rune1
+                        tempRuneCount--; // 2-byte sequence -> 1 rune
                     }
 
                     continue;
