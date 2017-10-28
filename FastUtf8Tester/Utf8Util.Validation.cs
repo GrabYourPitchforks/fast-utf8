@@ -145,8 +145,6 @@ namespace FastUtf8Tester
 
                     if (inputBufferRemainingBytes >= 5 * sizeof(uint))
                     {
-                        IntPtr inputBufferOriginalOffset = inputBufferCurrentOffset;
-
                         // The JIT produces better codegen for aligned reads than it does for
                         // unaligned reads, and we want the processor to operate at maximum
                         // efficiency in the loop that follows, so we'll align the references
@@ -189,7 +187,7 @@ namespace FastUtf8Tester
                             inputBufferCurrentOffset += 4 * sizeof(uint);
                         } while (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, inputBufferFinalOffsetAtWhichCanSafelyLoop));
 
-                        inputBufferRemainingBytes -= (IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) - IntPtrToInt32NoOverflowCheck(inputBufferOriginalOffset));
+                        inputBufferRemainingBytes = inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
                         continue; // need to perform a bounds check because we might be running out of data
 
                         LoopTerminatedEarlyDueToNonAsciiData:
@@ -205,7 +203,7 @@ namespace FastUtf8Tester
                             thisDWord = Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
                         }
 
-                        inputBufferRemainingBytes -= (IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset) - IntPtrToInt32NoOverflowCheck(inputBufferOriginalOffset));
+                        inputBufferRemainingBytes = inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
                         goto AfterReadDWordSkipAllBytesAsciiCheck;
                     }
 
