@@ -405,7 +405,7 @@ namespace FastUtf8Tester
         {
             if (PeekFirstSequence(inputBuffer, out bytesConsumed, out var scalar) == SequenceValidity.WellFormed)
             {
-                rune = scalar.Value;
+                rune = (int)scalar;
                 return true;
             }
 

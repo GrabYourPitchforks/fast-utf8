@@ -204,7 +204,7 @@ namespace Tests
 
             Assert.Equal(SequenceValidity.WellFormed, validity);
             Assert.Equal(asUtf8Bytes.Length, numBytesConsumed);
-            Assert.Equal(scalar, scalarValue.Value);
+            Assert.Equal(scalar, (int)scalarValue);
 
             // Act & assert 2 - with trailing data
 
@@ -216,7 +216,7 @@ namespace Tests
 
             Assert.Equal(SequenceValidity.WellFormed, validity);
             Assert.Equal(asUtf8Bytes.Length, numBytesConsumed);
-            Assert.Equal(scalar, scalarValue.Value);
+            Assert.Equal(scalar, (int)scalarValue);
         }
 
         [Fact]
