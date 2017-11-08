@@ -270,7 +270,7 @@ namespace Tests
         {
             Assert.Equal(2, invalidSequence.Length);
 
-            byte[] KNOWN_GOOD_BYTES = DecodeHex(E_ACUTE);
+            byte[] KNOWN_GOOD_BYTES = TestUtil.DecodeHex(E_ACUTE);
 
             byte[] toTest = invalidSequence.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // at start of first DWORD
             GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 0, 0, 0);
@@ -292,7 +292,7 @@ namespace Tests
         {
             Assert.Equal(3, invalidSequence.Length);
 
-            byte[] KNOWN_GOOD_BYTES = DecodeHex(EURO_SYMBOL);
+            byte[] KNOWN_GOOD_BYTES = TestUtil.DecodeHex(EURO_SYMBOL);
 
             byte[] toTest = invalidSequence.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray(); // at start of first DWORD
             GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 0, 0, 0);
@@ -314,7 +314,7 @@ namespace Tests
         {
             Assert.Equal(4, invalidSequence.Length);
 
-            byte[] KNOWN_GOOD_BYTES = DecodeHex(GRINNING_FACE);
+            byte[] KNOWN_GOOD_BYTES = TestUtil.DecodeHex(GRINNING_FACE);
 
             byte[] toTest = invalidSequence.Concat(invalidSequence).Concat(KNOWN_GOOD_BYTES).ToArray();
             GetIndexOfFirstInvalidUtf8Sequence_Test_Core(toTest, 0, 0, 0);
@@ -327,7 +327,7 @@ namespace Tests
         {
             // Arrange
 
-            var inputBytes = NativeMemory.GetProtectedReadonlyBuffer(DecodeHex(inputHex));
+            var inputBytes = NativeMemory.GetProtectedReadonlyBuffer(TestUtil.DecodeHex(inputHex));
 
             // Act
 
@@ -355,33 +355,6 @@ namespace Tests
             Assert.Equal(expectedRetVal, indexOfFirstInvalidChar);
             Assert.Equal(expectedRuneCount, actualRuneCount);
             Assert.Equal(expectedSurrogatePairCount, actualSurrogatePairCount);
-        }
-
-        private static byte[] DecodeHex(string input)
-        {
-            int ParseNibble(char ch)
-            {
-                ch -= (char)'0';
-                if (ch < 10) { return ch; }
-
-                ch -= (char)('A' - '0');
-                if (ch < 6) { return (ch + 10); }
-
-                ch -= (char)('a' - 'A');
-                if (ch < 6) { return (ch + 10); }
-
-                throw new Exception("Invalid hex character.");
-            }
-
-            if (input.Length % 2 != 0) { throw new Exception("Invalid hex data."); }
-
-            byte[] retVal = new byte[input.Length / 2];
-            for (int i = 0; i < retVal.Length; i++)
-            {
-                retVal[i] = (byte)((ParseNibble(input[2 * i]) << 4) | ParseNibble(input[2 * i + 1]));
-            }
-
-            return retVal;
         }
     }
 }
