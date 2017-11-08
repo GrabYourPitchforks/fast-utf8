@@ -115,7 +115,6 @@ namespace FastUtf8Tester
 
                 Debug.Assert(numBytesConsumed < 4);
                 Debug.Assert(numBytesConsumed == partialSequenceNewByteCount);
-                Debug.Assert(utf8Bytes.IsEmpty);
 
                 // Put all partial data into the high 3 bytes, making room for us to
                 // write the count of partial bytes in the buffer as the low byte.

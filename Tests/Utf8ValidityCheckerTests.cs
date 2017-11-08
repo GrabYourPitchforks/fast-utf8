@@ -92,7 +92,7 @@ namespace Tests
         [InlineData(new object[] { new[] { "C2", "80C2", "80C280C2", "C2" } })] // C2 C2 is not a valid multi-byte sequence
         [InlineData(new object[] { new[] { "C2", "80C2", "80C280C2", "80C220" } })] // C2 20 is not a valid multi-byte sequence
         [InlineData(new object[] { new[] { "C2", "80C2", "80C280C2", "80C180" } })] // C1 is never a valid code unit
-        [InlineData(new object[] { new[] { "F4", "808080F4", "8080", "90" } })] // out-of-range sequence
+        [InlineData(new object[] { new[] { "F4", "808080F4", "8080", "80F490" } })] // out-of-range sequence
         [InlineData(new object[] { new[] { "F0", "908080F0", "80" } })] // overlong sequence
         public void TryConsume_FailureCases(string[] chunks)
         {
