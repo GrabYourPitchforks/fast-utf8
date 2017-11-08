@@ -732,7 +732,7 @@ namespace FastUtf8Tester
                 // method.
 
                 byte* pbFinalPosAtWhichCanReadTwoVectors = &pbBuffer[length - 2 * Vector<byte>.Count];
-                Debug.Assert(pbFinalPosAtWhichCanReadTwoVectors - pbAlignedBuffer <= 2 * Vector<byte>.Count);
+                Debug.Assert(pbFinalPosAtWhichCanReadTwoVectors - pbAlignedBuffer >= 2 * Vector<byte>.Count);
 
                 do
                 {
