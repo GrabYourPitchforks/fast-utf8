@@ -1,9 +1,7 @@
-﻿using System;
-using System.Diagnostics;
+﻿// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-// TODO: Change all of the devdoc to use active tense instead of past tense.
-
-namespace FastUtf8Tester
+namespace System.Buffers.Text
 {
     /// <summary>
     /// Contains utility methods for inspecting UTF-8 sequences.
@@ -20,122 +18,6 @@ namespace FastUtf8Tester
         /// The Unicode Replacement Character (U+FFFD) as the three-byte UTF-8 sequence [ EF BF BD ].
         /// </summary>
         public static ReadOnlySpan<byte> ReplacementCharacterByteSequence => _replacementCharAsUtf8;
-
-        /// <summary>
-        /// If <paramref name="data"/> is a well-formed UTF-8 string and <paramref name="suppressStringCreationOnValidInput"/> is <see langword="false"/>, returns <paramref name="data"/> as a byte array.
-        /// If <paramref name="data"/> is a well-formed UTF-8 string and <paramref name="suppressStringCreationOnValidInput"/> is <see langword="true"/>, returns <see langword="null"/>.
-        /// If <paramref name="data"/> is not a well-formed UTF-8 string, returns a byte array which represents the well-formed UTF-8 string
-        /// resulting from replacing all invalid sequences in the input data with the Unicode Replacement Character (U+FFFD).
-        /// </summary>
-        public static byte[] ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(ReadOnlySpan<byte> data, bool suppressStringCreationOnValidInput)
-        {
-            int indexOfFirstInvalidSequence = GetIndexOfFirstInvalidUtf8Sequence(data);
-            if (indexOfFirstInvalidSequence < 0)
-            {
-                // Entire sequence was valid; return original data or null depending on flags
-                return (suppressStringCreationOnValidInput) ? null : data.ToArray();
-            }
-
-            // If we reached this point, we know there was invalid data in the buffer.
-            // Figure out how much room we need for fixing up the remainder, then perform fixup.
-
-            var dataRemainder = data.Slice(indexOfFirstInvalidSequence);
-            var byteCountForFixedUpRemainder = GetCountOfTotalBytesAfterInvalidSequenceReplacement(dataRemainder);
-
-            // We can memcpy the first part of the data (up to where the first invalid sequence was)
-            // into the output since we know it doesn't require any fixup.
-
-            byte[] retVal = new byte[checked(indexOfFirstInvalidSequence + byteCountForFixedUpRemainder)];
-            data.CopyTo(retVal);
-
-            Span<byte> retValRemainder = new Span<byte>(retVal).Slice(indexOfFirstInvalidSequence);
-            int numBytesConverted = ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(dataRemainder, retValRemainder);
-            Debug.Assert(numBytesConverted == retValRemainder.Length);
-
-            return retVal;
-        }
-
-        /// <summary>
-        /// If <paramref name="inputBuffer"/> is a well-formed UTF-8 string, copies <paramref name="inputBuffer"/> to <paramref name="outputBuffer"/> unmodified.
-        /// If <paramref name="inputBuffer"/> is not a well-formed UTF-8 string, copies <paramref name="inputBuffer"/> to <paramref name="outputBuffer"/>
-        /// and replaces all invalid UTF-8 sequences with the Unicode Replacement Character (U+FFFD) during copy.
-        /// </summary>
-        /// <returns>The number of bytes written to <paramref name="outputBuffer"/>.</returns>
-        /// <remarks>
-        /// The caller must allocate an output buffer large enough to hold the resulting UTF-8 string.
-        /// This length can be determined by calling the <see cref="GetCountOfTotalBytesAfterInvalidSequenceReplacement(ReadOnlySpan{byte})"/> method.
-        /// </remarks>
-        public static int ConvertToWellFormedUtf8StringWithInvalidSequenceReplacement(ReadOnlySpan<byte> inputBuffer, Span<byte> outputBuffer)
-        {
-            int originalOutputBufferLength = outputBuffer.Length;
-            while (true)
-            {
-                int indexOfFirstInvalidSequence = GetIndexOfFirstInvalidUtf8Sequence(inputBuffer);
-                if (indexOfFirstInvalidSequence < 0)
-                {
-                    break; // all remaining data is good
-                }
-
-                // Copy all data up to (but not including) the first invalid sequence into
-                // the output buffer, then copy a replacement char into the output buffer,
-                // then skip over the invalid data and loop again.
-
-                inputBuffer.Slice(0, indexOfFirstInvalidSequence).CopyTo(outputBuffer);
-                inputBuffer = inputBuffer.Slice(indexOfFirstInvalidSequence);
-                var validity = PeekFirstSequence(inputBuffer, out var invalidSequenceLength, out _);
-                Debug.Assert((validity == SequenceValidity.Incomplete) || (validity == SequenceValidity.Invalid));
-                inputBuffer = inputBuffer.Slice(invalidSequenceLength);
-
-                outputBuffer = outputBuffer.Slice(indexOfFirstInvalidSequence);
-                ReplacementCharacterByteSequence.CopyTo(outputBuffer);
-                outputBuffer = outputBuffer.Slice(ReplacementCharacterByteSequence.Length);
-            }
-
-            // The number of bytes written is going to be the difference between the original
-            // output buffer length and the remaining (unused) output buffer length.
-            return originalOutputBufferLength - outputBuffer.Length;
-        }
-
-        /// <summary>
-        /// If <paramref name="data"/> is an ill-formed UTF-8 string, returns the number of bytes required to hold the resulting
-        /// string where each invalid sequence in the input data has been replaced with the Unicode Replacement Character (U+FFFD).
-        /// If <paramref name="data"/> is a well-formed UTF-8 string, returns the number of bytes in the input string.
-        /// </summary>
-        /// <remarks>
-        /// The caller should not assume that the input data represents a well-formed UTF-8 string if the return value happens to
-        /// match the number of bytes already present in the input data. The reason for this is that the well-formed UTF-8 string
-        /// that results from replacement of invalid sequences with the Unicode Replacement Character (U+FFFD) may coincidentally
-        /// have the same length as the input data, even if the contents are different. Use the <see cref="IsWellFormedUtf8String(ReadOnlySpan{byte})"/>
-        /// method to determine if the input data is well-formed.
-        /// </remarks>
-        public static int GetCountOfTotalBytesAfterInvalidSequenceReplacement(ReadOnlySpan<byte> data)
-        {
-            int numBytesProcessedSoFar = 0;
-            while (true)
-            {
-                int indexOfFirstInvalidSequence = GetIndexOfFirstInvalidUtf8Sequence(data);
-                if (indexOfFirstInvalidSequence < 0)
-                {
-                    // All remaining data is good, add it to the cumulative total and we're done.
-                    return checked(numBytesProcessedSoFar + data.Length); // Finished!
-                }
-                else
-                {
-                    // Add the good data to the cumulative total, then add the replacement char sequence.
-                    checked { numBytesProcessedSoFar += indexOfFirstInvalidSequence; }
-
-                    data = data.Slice(indexOfFirstInvalidSequence);
-                    var validity = PeekFirstSequence(data, out int numBytesInInvalidSequence, out _);
-
-                    Debug.Assert(numBytesInInvalidSequence > 0);
-                    Debug.Assert((validity == SequenceValidity.Incomplete) || (validity == SequenceValidity.Invalid));
-
-                    // Skip over the invalid data, substituting a single replacement char sequence.
-                    data = data.Slice(numBytesInInvalidSequence);
-                    checked { numBytesProcessedSoFar += ReplacementCharacterByteSequence.Length; }
-                }
-            }
-        }
 
         /// <summary>
         /// Given the first byte of a sequence, returns the expected number of continuation bytes
@@ -180,7 +62,8 @@ namespace FastUtf8Tester
         /// Returns the index of the first byte of the first invalid UTF-8 sequence in <paramref name="data"/>,
         /// or -1 if <paramref name="data"/> is a well-formed UTF-8 string.
         /// </summary>
-        public static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> data) => Utf8Util.GetIndexOfFirstInvalidByte(data);
+        public static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> data) =>
+            Utf8Util.GetIndexOfFirstInvalidUtf8Sequence(data, out _, out _);
 
         /// <summary>
         /// Return <see langword="true"/> iff <paramref name="value"/> is an ASCII value (within the range 0-127, inclusive).
@@ -241,7 +124,7 @@ namespace FastUtf8Tester
                 return SequenceValidity.WellFormed;
             }
 
-            if (!Utf8Util.IsWithinRangeInclusive(firstByte, (byte)0xC2U, (byte)0xF4U))
+            if (!Utf8Util.IsInRangeInclusive(firstByte, (byte)0xC2U, (byte)0xF4U))
             {
                 // Standalone continuation byte or "always invalid" byte = ill-formed one-byte sequence.
                 goto InvalidOneByteSequence;
@@ -278,7 +161,7 @@ namespace FastUtf8Tester
                 // Need to check for overlong or surrogate sequences.
 
                 uint scalar = (((uint)firstByte & 0x0FU) << 12) | (((uint)secondByte & 0x3FU) << 6);
-                if (scalar < 0x800U || Utf8Util.IsSurrogateFast(scalar)) { goto OverlongOutOfRangeOrSurrogateSequence; }
+                if (scalar < 0x800U || Utf8Util.IsLowWordSurrogate(scalar)) { goto OverlongOutOfRangeOrSurrogateSequence; }
 
                 // At this point, we have a valid two-byte start of a three-byte sequence.
 
@@ -311,7 +194,7 @@ namespace FastUtf8Tester
                 // Need to check for overlong or out-of-range sequences.
 
                 uint scalar = (((uint)firstByte & 0x07U) << 18) | (((uint)secondByte & 0x3FU) << 12);
-                if (!Utf8Util.IsWithinRangeInclusive(scalar, 0x10000U, 0x10FFFFU)) { goto OverlongOutOfRangeOrSurrogateSequence; }
+                if (!Utf8Util.IsInRangeInclusive(scalar, 0x10000U, 0x10FFFFU)) { goto OverlongOutOfRangeOrSurrogateSequence; }
 
                 // At this point, we have a valid two-byte start of a four-byte sequence.
 
@@ -387,6 +270,33 @@ namespace FastUtf8Tester
         }
 
         /// <summary>
+        /// Calculates the number of UTF-16 code units (<see cref="char"/>s) that would result from converting
+        /// the provided UTF-8 string to UTF-16 representation.
+        /// </summary>
+        /// <param name="inputBuffer">The buffer containing UTF-8 text.</param>
+        /// <param name="charCount">
+        /// If this method returns <see langword="true"/>, contains the equivalent <see cref="char"/> count of the input string.
+        /// If this method returns <see langword="false"/>, the value is undefined.
+        /// </param>
+        /// <returns>
+        /// <see langword="true"/> on success, <see langword="false"/> if the input is not a well-formed UTF-8 string.
+        /// </returns>
+        public static bool TryGetUtf16CharCount(ReadOnlySpan<byte> inputBuffer, out int charCount)
+        {
+            if (Utf8Util.GetIndexOfFirstInvalidUtf8Sequence(inputBuffer, out int runeCount, out int surrogatePairCount) < 0)
+            {
+                // can't overflow because UTF-16 code unit count is always <= UTF-8 code unit count for well-formed strings
+                charCount = runeCount + surrogatePairCount;
+                return true;
+            }
+            else
+            {
+                charCount = default;
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Attempts to read the first rune (24-bit scalar value) from the provided UTF-8 sequence.
         /// </summary>
         /// <param name="rune">
@@ -405,7 +315,7 @@ namespace FastUtf8Tester
         {
             if (PeekFirstSequence(inputBuffer, out bytesConsumed, out var scalar) == SequenceValidity.WellFormed)
             {
-                rune = (int)scalar;
+                rune = (int)scalar.Value;
                 return true;
             }
 

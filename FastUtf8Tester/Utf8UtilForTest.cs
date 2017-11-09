@@ -7,7 +7,7 @@ namespace FastUtf8Tester
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> inputBuffer, out int runeCount, out int surrogatePairCount)
-            => Utf8Util.GetIndexOfFirstInvalidUtf8Sequence(ref inputBuffer.DangerousGetPinnableReference(), inputBuffer.Length, out runeCount, out surrogatePairCount);
+            => System.Buffers.Text.Utf8Util.GetIndexOfFirstInvalidUtf8Sequence(inputBuffer, out runeCount, out surrogatePairCount);
 
     }
 }

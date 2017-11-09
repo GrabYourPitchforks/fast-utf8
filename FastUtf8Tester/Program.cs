@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers.Text;
 using System.Diagnostics;
 using System.Numerics;
 using System.Text;
@@ -87,12 +88,17 @@ namespace FastUtf8Tester
             byte[] asBytes = Encoding.UTF8.GetBytes(lipsum);
             char[] asChars = new char[Encoding.UTF8.GetCharCount(asBytes)];
 
-            Console.WriteLine(Utf8Util.GetUtf16CharCount(asBytes));
-             Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
-            if (new String(asChars) != lipsum)
+            if (!Utf8Utility.TryGetUtf16CharCount(asBytes, out int charCount))
             {
-            //    throw new Exception("Didn't decode properly!");
+                throw new Exception("Didn't decode properly!");
             }
+
+            Console.WriteLine($"{charCount} UTF-16 code units");
+            // Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
+            //if (new String(asChars) != lipsum)
+            //{
+            ////    throw new Exception("Didn't decode properly!");
+            //}
             Array.Clear(asChars, 0, asChars.Length);
 
             var stopwatch = new Stopwatch();
@@ -102,7 +108,7 @@ namespace FastUtf8Tester
                 stopwatch.Restart();
                 for (int j = 0; j < NUM_ITERS; j++)
                 {
-                    Utf8Util.GetUtf16CharCount(asBytes);
+                    Utf8Utility.TryGetUtf16CharCount(asBytes, out _);
                 }
                 Console.WriteLine($"Elapsed: {stopwatch.Elapsed}");
             }

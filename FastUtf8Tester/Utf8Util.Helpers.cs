@@ -1,24 +1,46 @@
-﻿using System;
+﻿// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
-namespace FastUtf8Tester
+//
+// This file contains utility methods shared by the UTF-8 workhorse methods.
+//
+
+namespace System.Buffers.Text
 {
     internal static partial class Utf8Util
     {
-        // JITter is smart enough to turn this into ROL / ROR instruction
+        /// <summary>
+        /// Casts an <see cref="IntPtr"/> to an <see cref="int"/> without overflow checking.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint ROL32(uint value, int shift)
-            => (value << shift) | (value >> (32 - shift));
+        private static int ConvertIntPtrToInt32WithoutOverflowCheck(IntPtr value)
+        {
+            if (IntPtr.Size == 4)
+            {
+                return (int)value;
+            }
+            else
+            {
+                return (int)(long)value;
+            }
+        }
 
+        /// <summary>
+        /// Given a 24-bit integer which represents a three-byte buffer read in machine endianness,
+        /// counts the number of consecutive ASCII bytes starting from the beginning of the buffer.
+        /// Returns a value 0 - 3, inclusive.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint CountNumberOfLeadingAsciiBytesUpToThree(uint value)
+        private static uint CountNumberOfLeadingAsciiBytesFrom24BitInteger(uint value)
         {
             // TODO: BMI & TZCNT support as optimization
 
             // The 'allBytesUpToNowAreAscii' DWORD uses bit twiddling to hold a 1 or a 0 depending
             // on whether all processed bytes were ASCII. Then we accumulate all of the
-            // results to calculate how many ASCII bytes we can strip off at once.
+            // results to calculate how many consecutive ASCII bytes are present.
 
             value = ~value;
 
@@ -56,275 +78,24 @@ namespace FastUtf8Tester
             }
         }
 
+        /// <summary>
+        /// Returns <see langword="true"/> iff all bytes in <paramref name="value"/> are ASCII.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static unsafe int GetNumberOfBytesToNextDWordAlignment(ref byte @ref)
-            => (int)((uint)sizeof(uint) - ((uint)Unsafe.AsPointer(ref @ref) % sizeof(uint)));
-
-        // Assuming 'buffer' points to the start of an invalid sequence, returns the length (in bytes)
-        // of the invalid sequence.
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int GetInvalidByteCount(ref byte buffer, int bufferLength)
+        private static bool DWordAllBytesAreAscii(uint value)
         {
-            // We don't try to optimize this code path because it should only ever be hit in exceptional (error) cases.
-
-            uint firstByte = (bufferLength >= 1) ? (uint)buffer : 0;
-
-            if (firstByte < 0x80U)
-            {
-                return 0; // ASCII byte (or empty buffer) => not invalid sequence
-            }
-
-            if (!IsWithinRangeInclusive(firstByte, 0xC2U, 0xF4U))
-            {
-                // Per Table 3-7, if the first byte is not ASCII, it must be [ C2 .. F4 ].
-                return 1;
-            }
-
-            // Begin multi-byte checking
-
-            uint secondByte = (bufferLength >= 2) ? (uint)Unsafe.Add(ref buffer, 1) : 0;
-
-            if (!IsValidTrailingByte(secondByte))
-            {
-                // The first byte said it was the start of a multi-byte sequence, but the
-                // following byte is not a trailing byte. Hence the first byte is incorrect.
-                return 1;
-            }
-
-            if (firstByte < 0xE0U)
-            {
-                // Valid two-byte sequence: [ C2 .. DF ] [ 80 .. BF ]
-                return 0;
-            }
-
-            // These sequences come from Table 3-7.
-            // The (first byte, second byte) tuples below are invalid.
-            if ((firstByte == 0xE0U && secondByte < 0xA0U)
-                || (firstByte == 0xEDU && secondByte > 0x9FU)
-                || (firstByte == 0xF0U && secondByte < 0x90U)
-                || (firstByte == 0xF4U && secondByte > 0x8FU))
-            {
-                return 2;
-            }
-
-            uint thirdByte = (bufferLength >= 3) ? (uint)Unsafe.Add(ref buffer, 2) : 0;
-
-            if (!IsValidTrailingByte(thirdByte))
-            {
-                // The first two bytes represent an incomplete three-byte (or four-byte) sequence.
-                return 2;
-            }
-
-            if (firstByte < 0xF0U)
-            {
-                // Valid three-byte sequence
-                return 0;
-            }
-
-            uint fourthByte = (bufferLength >= 4) ? (uint)Unsafe.Add(ref buffer, 3) : 0;
-
-            if (!IsValidTrailingByte(fourthByte))
-            {
-                // The first three bytes represent an incomplete four-byte sequence.
-                return 3;
-            }
-
-            // Valid four-byte sequence
-            return 0;
+            return ((value & 0x80808080U) == 0U);
         }
 
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the buffer contains two UTF-8 sequences
+        /// that match the mask [ 110yyyyy 10xxxxxx 110yyyyy 10xxxxxx ]. This method *does not*
+        /// validate that the sequences are well-formed; the caller must still perform
+        /// overlong form checking.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe static bool IntPtrIsLessThan(IntPtr a, IntPtr b) => (a.ToPointer() < b.ToPointer());
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe static bool IntPtrIsLessThanOrEqualTo(IntPtr a, IntPtr b) => (a.ToPointer() <= b.ToPointer());
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int IntPtrToInt32NoOverflowCheck(IntPtr value)
-        {
-            if (IntPtr.Size == 4)
-            {
-                return (int)value;
-            }
-            else
-            {
-                return (int)(long)value;
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsValidTrailingByte(uint value)
-        {
-            return ((value & 0xC0U) == 0x80U);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool IsWithinRangeInclusive(uint value, uint lowerBound, uint upperBound) => ((value - lowerBound) <= (upperBound - lowerBound));
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool IsWithinRangeInclusive(byte value, byte lowerBound, byte upperBound) => ((byte)(value - lowerBound) <= (byte)(upperBound - lowerBound));
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint GenerateUtf16CodeUnitFromUtf8CodeUnits(uint firstByte, uint secondByte)
-        {
-            return ((firstByte & 0x1FU) << 6)
-                | (secondByte & 0x3FU);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint GenerateUtf16CodeUnitFromUtf8CodeUnits(uint firstByte, uint secondByte, uint thirdByte)
-        {
-            return ((firstByte & 0x0FU) << 12)
-                   | ((secondByte & 0x3FU) << 6)
-                   | (secondByte & 0x3FU);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint GenerateUtf16CodeUnitsFromUtf8CodeUnits(uint firstByte, uint secondByte, uint thirdByte, uint fourthByte)
-        {
-            // This method needs to generate a surrogate pair.
-            // RETURN VALUE IS BIG ENDIAN
-
-            uint retVal = ((firstByte & 0x3U) << 24)
-                  | ((secondByte & 0x3FU) << 18)
-                  | ((thirdByte & 0x30U) << 12)
-                  | ((thirdByte & 0x0FU) << 6)
-                  | (fourthByte & 0x3FU);
-            retVal -= 0x400000U; // convert uuuuu to wwww per Table 3-5
-            retVal += 0xD800DC00U; // add surrogate markers back in
-            return retVal;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint GenerateUtf16CodeUnitsFromFourUtf8CodeUnits(uint utf8)
-        {
-            // input and output are in machine order
-            if (BitConverter.IsLittleEndian)
-            {
-                // UTF8 [ 10xxxxxx 10yyyyyy 10uuzzzz 11110uuu ] = scalar 000uuuuu zzzzyyyy yyxxxxxx
-                // UTF16 scalar 000uuuuuzzzzyyyyyyxxxxxx = [ 110111yy yyxxxxxx 110110ww wwzzzzyy ]
-                // where wwww = uuuuu - 1
-                uint retVal = (utf8 & 0x0F0000U) << 6; // retVal = [ 000000yy yy000000 00000000 00000000 ]
-                retVal |= (utf8 & 0x3F000000U) >> 8; // retVal = [ 000000yy yyxxxxxx 00000000 00000000 ]
-                retVal |= (utf8 & 0xFFU) << 8; // retVal = [ 000000yy yyxxxxxx 11110uuu 00000000 ]
-                retVal |= (utf8 & 0x3F00U) >> 6; // retVal = [ 000000yy yyxxxxxx 11110uuu uuzzzz00 ]
-                retVal |= (utf8 & 0x030000U) >> 16; // retVal = [ 000000yy yyxxxxxx 11110uuu uuzzzzyy ]
-                retVal -= 0x40U;// retVal = [ 000000yy yyxxxxxx 111100ww wwzzzzyy ]
-                retVal -= 0x2000U; // retVal = [ 000000yy yyxxxxxx 110100ww wwzzzzyy ]
-                retVal += 0x0800U; // retVal = [ 000000yy yyxxxxxx 110110ww wwzzzzyy ]
-                retVal += 0xDC000000U; // retVal = [ 110111yy yyxxxxxx 110110ww wwzzzzyy ]
-                return retVal;
-            }
-            else
-            {
-                // UTF8 [ 11110uuu 10uuzzzz 10yyyyyy 10xxxxxx ] = scalar 000uuuuu zzzzyyyy yyxxxxxx
-                // UTF16 scalar 000uuuuuxxxxxxxxxxxxxxxx = [ 110110wwwwxxxxxx 110111xxxxxxxxx ]
-                // where wwww = uuuuu - 1
-                // TODO: BMI support
-                uint retVal = utf8 & 0xFF000000U; // retVal = [ 11110uuu 00000000 00000000 00000000 ]
-                retVal |= (utf8 & 0x3F0000U) << 2; // retVal = [ 11110uuu uuzzzz00 00000000 00000000 ]
-                retVal |= (utf8 & 0x3000U) << 4; // retVal = [ 11110uuu uuzzzzyy 00000000 00000000 ]
-                retVal |= (utf8 & 0x0F00U) >> 2; // retVal = [ 11110uuu uuzzzzyy 000000yy yy000000 ]
-                retVal |= (utf8 & 0x3FU); // retVal = [ 11110uuu uuzzzzyy 000000yy yyxxxxxx ]
-                retVal -= 0x20000000U; // retVal = [ 11010uuu uuzzzzyy 000000yy yyxxxxxx ]
-                retVal -= 0x400000U; // retVal = [ 110100ww wwzzzzyy 000000yy yyxxxxxx ]
-                retVal += 0xDC00U; // retVal = [ 110100ww wwzzzzyy 110111yy yyxxxxxx ]
-                retVal += 0x08000000U; // retVal = [ 110110ww wwzzzzyy 110111yy yyxxxxxx ]
-                return retVal;
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordBeginsWithTwoByteMask(uint value)
-        {
-            // The code in this method is equivalent to the code
-            // below, but the JITter is able to inline + optimize it
-            // better in release builds.
-            //
-            // if (BitConverter.IsLittleEndian)
-            // {
-            //     const uint mask = 0x0000C0E0U;
-            //     const uint comparand = 0x000080C0U;
-            //     return ((value & mask) == comparand);
-            // }
-            // else
-            // {
-            //     const uint mask = 0xE0C00000U;
-            //     const uint comparand = 0xC0800000U;
-            //     return ((value & mask) == comparand);
-            // }
-
-            return (BitConverter.IsLittleEndian && ((value & 0x0000C0E0U) == 0x000080C0U))
-                || (!BitConverter.IsLittleEndian && ((value & 0xE0C00000U) == 0xC0800000U));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool EitherInt32IsNegative(int a, int b)
-        {
-            return ((a | b) < 0);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool BothValuesAreNonNegative(int a, int b)
-        {
-            return !EitherInt32IsNegative(a, b);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian(uint value)
-        {
-            // Per Table 3-7, valid 2-byte sequences are [ C2..DF ] [ 80..BF ].
-            // In little-endian, that would be represented as:
-            // [ ######## ######## 10xxxxxx 110yyyyy ].
-            // Due to the little-endian representation we can perform a trick by ANDing the low
-            // WORD with the bitmask [ 11000000 11111111 ] and checking that the value is within
-            // the range [ 11000000_11000010, 11000000_11011111 ]. This performs both the
-            // 2-byte-sequence bitmask check and overlong form validation with one comparison.
-
-            Debug.Assert(BitConverter.IsLittleEndian);
-
-            return (BitConverter.IsLittleEndian && IsWithinRangeInclusive(value & 0xC0FFU, 0x80C2U, 0x80DFU))
-                || (!BitConverter.IsLittleEndian && false); // this line - while weird - helps JITter produce optimal code
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordEndsWithValidTwoByteSequenceLittleEndian(uint value)
-        {
-            // See comment in Utf8DWordBeginsWithValidTwoByteSequenceLittleEndian for how this works.
-            // The only difference is that we use the high WORD instead of the low WORD.
-
-            Debug.Assert(BitConverter.IsLittleEndian);
-
-            return (BitConverter.IsLittleEndian && IsWithinRangeInclusive(value & 0xC0FF0000U, 0x80C20000U, 0x80DF0000U))
-                || (!BitConverter.IsLittleEndian && false); // this line - while weird - helps JITter produce optimal code
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordEndsWithTwoByteMask(uint value)
-        {
-            // The code in this method is equivalent to the code
-            // below, but the JITter is able to inline + optimize it
-            // better in release builds.
-            //
-            // if (BitConverter.IsLittleEndian)
-            // {
-            //     const uint mask = 0xC0E00000U;
-            //     const uint comparand = 0x80C00000U;
-            //     return ((value & mask) == comparand);
-            // }
-            // else
-            // {
-            //     const uint mask = 0x0000E0C0U;
-            //     const uint comparand = 0x0000C080U;
-            //     return ((value & mask) == comparand);
-            // }
-
-            return (BitConverter.IsLittleEndian && ((value & 0xC0E00000U) == 0x80C00000U))
-                  || (!BitConverter.IsLittleEndian && ((value & 0x0000E0C0U) == 0x0000C080U));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordBeginsAndEndsWithTwoByteMask(uint value)
+        private static bool DWordBeginsAndEndsWithUtf8TwoByteMask(uint value)
         {
             // The code in this method is equivalent to the code
             // below, but the JITter is able to inline + optimize it
@@ -347,32 +118,36 @@ namespace FastUtf8Tester
                 || (!BitConverter.IsLittleEndian && ((value & 0xE0C0E0C0U) == 0xC080C080U));
         }
 
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the first two bytes of the buffer are
+        /// an overlong representation of a sequence that should be represented as one byte.
+        /// This method *does not* validate that the sequence matches the appropriate
+        /// 2-byte sequence mask (see <see cref="DWordBeginsWithUtf8TwoByteMask"/>).
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordBeginsWithThreeByteMask(uint value)
+        private static bool DWordBeginsWithOverlongUtf8TwoByteSequence(uint value)
         {
-            // The code in this method is equivalent to the code
-            // below, but the JITter is able to inline + optimize it
-            // better in release builds.
-            //
-            // if (BitConverter.IsLittleEndian)
-            // {
-            //     const uint mask = 0x00C0C0F0U;
-            //     const uint comparand = 0x008080E0U;
-            //     return ((value & mask) == comparand);
-            // }
-            // else
-            // {
-            //     const uint mask = 0xF0C0C000U;
-            //     const uint comparand = 0xE0808000U;
-            //     return ((value & mask) == comparand);
-            // }
+            // ASSUMPTION: Caller has already checked the '110yyyyy 10xxxxxx' mask of the input.
+            Debug.Assert(DWordBeginsWithUtf8TwoByteMask(value));
 
-            return (BitConverter.IsLittleEndian && ((value & 0x00C0C0F0U) == 0x008080E0U))
-                   || (!BitConverter.IsLittleEndian && ((value & 0xF0C0C000U) == 0xE0808000U));
+            // Per Table 3-7, first byte of two-byte sequence must be within range C2 .. DF.
+            // Since we already validated it's 80 <= ?? <= DF (per mask check earlier), now only need
+            // to check that it's < C2.
+
+            return (BitConverter.IsLittleEndian && ((byte)value < (byte)0xC2))
+                || (!BitConverter.IsLittleEndian && (value < 0xC2000000U));
         }
 
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the first four bytes of the buffer match
+        /// the UTF-8 4-byte sequence mask [ 11110www 10zzzzzz 10yyyyyy 10xxxxxx ]. This
+        /// method *does not* validate that the sequence is well-formed; the caller must
+        /// still perform overlong form or out-of-range checking.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordBeginsWithFourByteMask(uint value)
+        private static bool DWordBeginsWithUtf8FourByteMask(uint value)
         {
             // The code in this method is equivalent to the code
             // below, but the JITter is able to inline + optimize it
@@ -395,8 +170,15 @@ namespace FastUtf8Tester
                    || (!BitConverter.IsLittleEndian && ((value & 0xF8C0C0C0U) == 0xF0808000U));
         }
 
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the first three bytes of the buffer match
+        /// the UTF-8 3-byte sequence mask [ 1110zzzz 10yyyyyy 10xxxxxx ]. This method *does not*
+        /// validate that the sequence is well-formed; the caller must still perform
+        /// overlong form or surrogate checking.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordEndsWithThreeByteSequenceMarker(uint value)
+        private static bool DWordBeginsWithUtf8ThreeByteMask(uint value)
         {
             // The code in this method is equivalent to the code
             // below, but the JITter is able to inline + optimize it
@@ -404,47 +186,30 @@ namespace FastUtf8Tester
             //
             // if (BitConverter.IsLittleEndian)
             // {
-            //     // search input word for [ B1 A3 A2 A1 ]
-            //     return ((value & 0xF0000000U) == 0xE0000000U);
+            //     const uint mask = 0x00C0C0F0U;
+            //     const uint comparand = 0x008080E0U;
+            //     return ((value & mask) == comparand);
             // }
             // else
             // {
-            //     // search input word for [ A1 A2 A3 B1 ]
-            //     return ((value & 0xF0U) == 0xE0U);
+            //     const uint mask = 0xF0C0C000U;
+            //     const uint comparand = 0xE0808000U;
+            //     return ((value & mask) == comparand);
             // }
 
-            return (BitConverter.IsLittleEndian && ((value & 0xF0000000U) == 0xE0000000U))
-                   || (!BitConverter.IsLittleEndian && ((value & 0xF0U) == 0xE0U));
+            return (BitConverter.IsLittleEndian && ((value & 0x00C0C0F0U) == 0x008080E0U))
+                   || (!BitConverter.IsLittleEndian && ((value & 0xF0C0C000U) == 0xE0808000U));
         }
 
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the first two bytes of the buffer match
+        /// the UTF-8 2-byte sequence mask [ 110yyyyy 10xxxxxx ]. This method *does not*
+        /// validate that the sequence is well-formed; the caller must still perform
+        /// overlong form checking.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordAllBytesAreAscii(uint value)
-        {
-            return ((value & 0x80808080U) == 0U);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8QWordAllBytesAreAscii(ulong value)
-        {
-            return ((value & 0x8080808080808080UL) == 0UL);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ulong ReadAndFoldTwoQWords(ref byte buffer)
-        {
-            return Unsafe.ReadUnaligned<ulong>(ref buffer)
-                | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, sizeof(ulong)));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint ReadAndFoldTwoDWords(ref byte buffer)
-        {
-            return Unsafe.ReadUnaligned<uint>(ref buffer)
-                | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, sizeof(uint)));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordFirstByteIsAscii(uint value)
+        private static bool DWordBeginsWithUtf8TwoByteMask(uint value)
         {
             // The code in this method is equivalent to the code
             // below, but the JITter is able to inline + optimize it
@@ -452,19 +217,54 @@ namespace FastUtf8Tester
             //
             // if (BitConverter.IsLittleEndian)
             // {
-            //     return ((value & 0x80U) == 0U);
+            //     const uint mask = 0x0000C0E0U;
+            //     const uint comparand = 0x000080C0U;
+            //     return ((value & mask) == comparand);
             // }
             // else
             // {
-            //     return ((int)value >= 0);
+            //     const uint mask = 0xE0C00000U;
+            //     const uint comparand = 0xC0800000U;
+            //     return ((value & mask) == comparand);
             // }
 
-            return (BitConverter.IsLittleEndian && ((value & 0x80U) == 0U))
-                || (!BitConverter.IsLittleEndian && ((int)value >= 0));
+            return (BitConverter.IsLittleEndian && ((value & 0x0000C0E0U) == 0x000080C0U))
+                || (!BitConverter.IsLittleEndian && ((value & 0xE0C00000U) == 0xC0800000U));
         }
 
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the first two bytes of the buffer are
+        /// an overlong representation of a sequence that should be represented as one byte.
+        /// This method *does not* validate that the sequence matches the appropriate
+        /// 2-byte sequence mask (see <see cref="DWordBeginsWithUtf8TwoByteMask"/>).
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordSecondByteIsAscii(uint value)
+        private static bool DWordEndsWithOverlongUtf8TwoByteSequence(uint value)
+        {
+            // ASSUMPTION: Caller has already checked the '110yyyyy 10xxxxxx' mask of the input.
+            Debug.Assert(DWordEndsWithUtf8TwoByteMask(value));
+
+            // Per Table 3-7, first byte of two-byte sequence must be within range C2 .. DF.
+            // We already validated that it's 80 .. DF (per mask check earlier).
+            // C2 = 1100 0010
+            // DF = 1101 1111
+            // This means that we can AND the leading byte with the mask 0001 1110 (1E),
+            // and if the result is zero the sequence is overlong.
+
+            return (BitConverter.IsLittleEndian && ((value & 0x001E0000U) == 0U))
+                || (!BitConverter.IsLittleEndian && ((value & 0x1E00U) == 0U));
+        }
+
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the last two bytes of the buffer match
+        /// the UTF-8 2-byte sequence mask [ 110yyyyy 10xxxxxx ]. This method *does not*
+        /// validate that the sequence is well-formed; the caller must still perform
+        /// overlong form checking.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool DWordEndsWithUtf8TwoByteMask(uint value)
         {
             // The code in this method is equivalent to the code
             // below, but the JITter is able to inline + optimize it
@@ -472,39 +272,67 @@ namespace FastUtf8Tester
             //
             // if (BitConverter.IsLittleEndian)
             // {
-            //     return ((value & 0x8000U) == 0U);
+            //     const uint mask = 0xC0E00000U;
+            //     const uint comparand = 0x80C00000U;
+            //     return ((value & mask) == comparand);
             // }
             // else
             // {
-            //     return ((value & 0x800000U) == 0U);
+            //     const uint mask = 0x0000E0C0U;
+            //     const uint comparand = 0x0000C080U;
+            //     return ((value & mask) == comparand);
             // }
 
-            return (BitConverter.IsLittleEndian && ((value & 0x8000U) == 0U))
-                || (!BitConverter.IsLittleEndian && ((value & 0x800000U) == 0U));
+            return (BitConverter.IsLittleEndian && ((value & 0xC0E00000U) == 0x80C00000U))
+                  || (!BitConverter.IsLittleEndian && ((value & 0x0000E0C0U) == 0x0000C080U));
         }
 
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD on a little-endian machine,
+        /// returns <see langword="true"/> iff the first two bytes of the buffer are a well-formed
+        /// UTF-8 two-byte sequence. This wraps the mask check and the overlong check into a
+        /// single operation. Returns <see langword="false"/> if running on a big-endian machine.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordThirdByteIsAscii(uint value)
+        private static bool DWordBeginsWithValidUtf8TwoByteSequenceLittleEndian(uint value)
         {
-            // The code in this method is equivalent to the code
-            // below, but the JITter is able to inline + optimize it
-            // better in release builds.
-            //
-            // if (BitConverter.IsLittleEndian)
-            // {
-            //     return ((value & 0x800000U) == 0U);
-            // }
-            // else
-            // {
-            //     return ((value & 0x8000U) == 0U);
-            // }
+            // Per Table 3-7, valid 2-byte sequences are [ C2..DF ] [ 80..BF ].
+            // In little-endian, that would be represented as:
+            // [ ######## ######## 10xxxxxx 110yyyyy ].
+            // Due to the little-endian representation we can perform a trick by ANDing the low
+            // WORD with the bitmask [ 11000000 11111111 ] and checking that the value is within
+            // the range [ 11000000_11000010, 11000000_11011111 ]. This performs both the
+            // 2-byte-sequence bitmask check and overlong form validation with one comparison.
 
-            return (BitConverter.IsLittleEndian && ((value & 0x800000U) == 0U))
-                || (!BitConverter.IsLittleEndian && ((value & 0x8000U) == 0U));
+            Debug.Assert(BitConverter.IsLittleEndian);
+
+            return (BitConverter.IsLittleEndian && IsInRangeInclusive(value & 0xC0FFU, 0x80C2U, 0x80DFU))
+                || (!BitConverter.IsLittleEndian && false); // this line - while weird - helps JITter produce optimal code
         }
 
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD on a little-endian machine,
+        /// returns <see langword="true"/> iff the last two bytes of the buffer are a well-formed
+        /// UTF-8 two-byte sequence. This wraps the mask check and the overlong check into a
+        /// single operation. Returns <see langword="false"/> if running on a big-endian machine.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool Utf8DWordFourthByteIsAscii(uint value)
+        private static bool DWordEndsWithValidUtf8TwoByteSequenceLittleEndian(uint value)
+        {
+            // See comments in DWordBeginsWithValidUtf8TwoByteSequenceLittleEndian.
+
+            Debug.Assert(BitConverter.IsLittleEndian);
+
+            return (BitConverter.IsLittleEndian && IsInRangeInclusive(value & 0xC0FF0000U, 0x80C20000U, 0x80DF0000U))
+                || (!BitConverter.IsLittleEndian && false); // this line - while weird - helps JITter produce optimal code
+        }
+
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the fourth byte of the buffer is ASCII.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool DWordFourthByteIsAscii(uint value)
         {
             // The code in this method is equivalent to the code
             // below, but the JITter is able to inline + optimize it
@@ -523,222 +351,107 @@ namespace FastUtf8Tester
                 || (!BitConverter.IsLittleEndian && ((value & 0x80U) == 0U));
         }
 
-        // Widens a QWORD which represents a buffer of 8 BYTEs into 8 WORDs and writes them
-        // to an output buffer with machine endianness.
+        /// <summary>
+        /// Given a UTF-8 buffer which has been read into a DWORD in machine endianness,
+        /// returns <see langword="true"/> iff the third byte of the buffer is ASCII.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void WritePackedQWordAsChars(ref char chars, ulong value)
+        private static bool DWordThirdByteIsAscii(uint value)
         {
-            // TODO: BMI support
+            // The code in this method is equivalent to the code
+            // below, but the JITter is able to inline + optimize it
+            // better in release builds.
+            //
+            // if (BitConverter.IsLittleEndian)
+            // {
+            //     return ((value & 0x800000U) == 0U);
+            // }
+            // else
+            // {
+            //     return ((value & 0x8000U) == 0U);
+            // }
 
-            if (BitConverter.IsLittleEndian)
-            {
-                chars = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 4) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 5) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 6) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 7) = (char)value;
-            }
-            else
-            {
-                Unsafe.Add(ref chars, 7) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 6) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 5) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 4) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
-                chars = (char)value;
-            }
+            return (BitConverter.IsLittleEndian && ((value & 0x800000U) == 0U))
+                || (!BitConverter.IsLittleEndian && ((value & 0x8000U) == 0U));
         }
 
+        /// <summary>
+        /// Given a memory reference, returns the number of bytes that must be added to the reference
+        /// before the reference is DWORD-aligned. Returns a number in the range 0 - 3, inclusive.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static char ExtractCharFromFirstThreeByteSequence(uint value)
+        private static unsafe int GetNumberOfBytesToNextDWordAlignment(ref byte @ref)
+            => (int)((uint)sizeof(uint) - ((uint)Unsafe.AsPointer(ref @ref) % sizeof(uint)));
+
+        /// <summary>
+        /// Returns <see langword="true"/> iff (<paramref name="a"/> &lt;= <paramref name="b"/>).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private unsafe static bool IntPtrIsLessThanOrEqualTo(IntPtr a, IntPtr b) => (a.ToPointer() <= b.ToPointer());
+
+        /// <summary>
+        /// Returns <see langword="true"/> iff <paramref name="value"/> is between
+        /// <paramref name="lowerBound"/> and <paramref name="upperBound"/>, inclusive.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool IsInRangeInclusive(byte value, byte lowerBound, byte upperBound) => ((byte)(value - lowerBound) <= (byte)(upperBound - lowerBound));
+
+        /// <summary>
+        /// Returns <see langword="true"/> iff <paramref name="value"/> is between
+        /// <paramref name="lowerBound"/> and <paramref name="upperBound"/>, inclusive.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool IsInRangeInclusive(uint value, uint lowerBound, uint upperBound) => ((value - lowerBound) <= (upperBound - lowerBound));
+
+        /// <summary>
+        /// Returns <see langword="true"/> iff the low word of <paramref name="char"/> is a UTF-16 surrogate.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool IsLowWordSurrogate(uint @char) => ((@char & 0xF800U) == 0xD800U);
+
+        /// <summary>
+        /// Returns <see langword="true"/> iff the low byte of <paramref name="value"/> is a UTF-8
+        /// continuation byte (10xxxxxx).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsUtf8ContinuationByte(uint value)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                // value = [ ######## | 10xxxxxx 10yyyyyy 1110zzzz ]
-                // TODO: BSWAP and BMI support
-                return (char)(((value & 0x003F0000U) >> 16)
-                    | ((value & 0x00003F00U) >> 2)
-                    | ((value & 0x0000000FU) << 12));
-            }
-            else
-            {
-                // value = [ 1110zzzz 10yyyyyy 10xxxxxx | ######## ]
-                // TODO: BMI support
-                return (char)(((value & 0x0F000000U) >> 12)
-                    | ((value & 0x003F0000U) >> 10)
-                    | ((value & 0x00003F00U) >> 8));
-            }
+            return ((value & 0xC0U) == 0x80U);
         }
 
+        /// <summary>
+        /// Returns the OR of the next two DWORDs in the buffer.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint ExtractTwoCharsPackedFromThreeByteSequenceFollowedByAsciiByte(uint value)
+        private static uint ReadAndFoldTwoDWordsUnaligned(ref byte buffer)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                // value = [ 0xxxxxxx | 10xxxxxx 10yyyyyy 1110zzzz ]
-                // TODO: BSWAP and BMI support
-                return ((value & 0x003F0000U) >> 16)
-                    | ((value & 0x00003F00U) >> 2)
-                    | ((value & 0x0000000FU) << 12)
-                    | ((value & 0x7F000000U) >> 8);
-            }
-            else
-            {
-                // value = [ 1110zzzz 10yyyyyy 10xxxxxx | 0xxxxxxx ]
-                // TODO: BMI support
-                return ((value & 0x0F000000U) << 4)
-                    | ((value & 0x003F0000U) << 6)
-                    | ((value & 0x00003F00U) << 8)
-                    | (byte)value;
-            }
+            return Unsafe.ReadUnaligned<uint>(ref buffer)
+                | Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref buffer, sizeof(uint)));
         }
 
+        /// <summary>
+        /// Returns the OR of the next two QWORDs in the buffer.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static char ExtractCharFromFirstTwoByteSequence(uint value)
+        private static ulong ReadAndFoldTwoQWordsUnaligned(ref byte buffer)
         {
-            if (BitConverter.IsLittleEndian)
-            {
-                // value = [ ######## ######## | 10xxxxxx 110yyyyy ]
-                // TODO: BSWAP and BMI support
-                return (char)(((value & 0x3F00U) >> 8) | ((value & 0x001FU) << 6));
-            }
-            else
-            {
-                // value = [ 110yyyyy 10xxxxxx | ######## ######## ]
-                // TODO: BMI support
-                return (char)(((value & 0x1F000000U) >> 18) | ((value & 0x003F0000U) >> 16));
-            }
+            return Unsafe.ReadUnaligned<ulong>(ref buffer)
+                | Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref buffer, sizeof(ulong)));
         }
 
+        /// <summary>
+        /// Rotates a DWORD left. The JITter is smart enough to turn this into a ROL / ROR instruction.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint ExtractTwoCharsPackedFromTwoAdjacentTwoByteSequences(uint value)
+        private static uint ROL32(uint value, int shift) => (value << shift) | (value >> (32 - shift));
+
+        /// <summary>
+        /// Returns <see langword="true"/> iff all bytes in <paramref name="value"/> are ASCII.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool QWordAllBytesAreAscii(ulong value)
         {
-            // We don't want to swap the position of the high and low WORDs,
-            // as the buffer was read in machine order and will be written in
-            // machine order.
-
-            if (BitConverter.IsLittleEndian)
-            {
-                // value = [ 10xxxxxx 110yyyyy | 10xxxxxx 110yyyyy ]
-                return ((value & 0x3F003F00U) >> 8) | ((value & 0x001F001FU) << 6);
-            }
-            else
-            {
-                // value = [ 110yyyyy 10xxxxxx | 110yyyyy 10xxxxxx ]
-                // TODO: BMI support
-                return ((value & 0x1F001F00U) >> 2) | (value & 0x003F003FU);
-            }
+            return ((value & 0x8080808080808080UL) == 0UL);
         }
-
-        // Widens a DWORD which represents a buffer of 4 BYTEs into 4 WORDs and writes them
-        // to an output buffer with machine endianness.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void WritePackedDWordAsChars(ref char chars, uint value)
-        {
-            // TODO: BMI support
-
-            if (BitConverter.IsLittleEndian)
-            {
-                chars = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 3) = (char)value;
-            }
-            else
-            {
-                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
-                chars = (char)value;
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsWellFormedCharPackFromDoubleTwoByteSequences(uint value)
-        {
-            // Given a value [ AAAA BBBB ], ensures that both AAAA and BBBB are
-            // at least U+0080. It's assumed that both AAAA and BBBB are < U+0800
-            // since such a scalar can't be formed from a two-byte UTF8 sequence.
-
-            // This method uses only arithmetic operations and bit manipulation
-            // in order to avoid storing + loading flags between calls.
-
-            uint a = value - 0x00800000U; // high bit will be set (underflow) if AAAA < 0x0080
-            uint b = (value & 0xFFFFU) - 0x0080U; // high bit will be set (underflow) if BBBB < 0x0080
-            return ((int)(a | b) >= 0); // if any high bit is set, underflow occurred
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsWellFormedCharPackFromQuadTwoByteSequences(ulong value)
-        {
-            // Like IsWellFormedCharPackFromDoubleTwoByteSequences, but works with
-            // 64-bit values of the form [ AAAA BBBB CCCC DDDD ].
-
-            ulong a = value - 0x0080000000000000UL; // high bit will be set (underflow) if AAAA < 0x0080
-            ulong b = (value & 0x0000FFFF00000000UL) - 0x0000008000000000U; // high bit will be set (underflow) if BBBB < 0x0080
-            ulong c = (value & 0x00000000FFFF0000UL) - 0x0000000000800000U; // high bit will be set (underflow) if CCCC < 0x0080
-            ulong d = (value & 0x000000000000FFFFUL) - 0x0000000000000080U; // high bit will be set (underflow) if DDDD < 0x0080
-            return ((long)(a | b | c | d) >= 0L); // if any high bit is set, underflow occurred
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsWellFormedCharPackFromDualThreeByteSequences(uint packedChars, ulong secondDWord)
-        {
-            if (!BitConverter.IsLittleEndian)
-            {
-                // TODO: SUPPORT BIG ENDIAN
-                throw new NotImplementedException();
-            }
-
-            return (packedChars >= 0x08000000U) /* char 'B' is >= U+0800 */
-                && ((packedChars & 0xF8000000U) != 0xD8000000U) /* char 'B' isn't a surrogate */
-                && ((packedChars & 0x0000F800U) != 0U) /* char 'A' is >= U+0800 */
-                && ((packedChars & 0x0000F800U) != 0x0000D800U) /* char 'A' isn't a surrogate */
-                && ((secondDWord & 0x0000C0C0U) == 0x00008080U); /* secondDWord has correct masking */
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsContinuationByte(byte b)
-        {
-            return (byte)(b & (byte)0xC0) == (byte)0x80;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsFirstWordWellFormedTwoByteSequence(uint value)
-        {
-            // ASSUMPTION: Caller has already checked the '110y yyyy 10xx xxxx' mask of the input.
-            Debug.Assert(Utf8DWordBeginsWithTwoByteMask(value));
-
-            // Per Table 3-7, first byte of two-byte sequence must be within range C2 .. DF.
-            // Since we already validated it's 80 <= ?? <= DF (per mask check earlier), now only need
-            // to check that it's >= C2.
-
-            return (BitConverter.IsLittleEndian && ((byte)value >= (byte)0xC2))
-                || (!BitConverter.IsLittleEndian && (value >= 0xC2000000U));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsSecondWordWellFormedTwoByteSequence(uint value)
-        {
-            // ASSUMPTION: Caller has already checked the '110y yyyy 10xx xxxx' mask of the input.
-            Debug.Assert(Utf8DWordEndsWithTwoByteMask(value));
-
-            // Per Table 3-7, first byte of two-byte sequence must be within range C2 .. DF.
-            // We already validated that it's 80 .. DF (per mask check earlier).
-            // C2 = 1100 0010
-            // DF = 1101 1111
-            // This means that we can use the mask 0001 1110 (1E) and a non-zero comparand.
-
-            return (BitConverter.IsLittleEndian && ((value & 0x001E0000U) != 0U))
-                || (!BitConverter.IsLittleEndian && ((value & 0x1E00U) != 0U));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool IsSurrogateFast(uint @char) => ((@char & 0xF800U) == 0xD800U);
     }
 }

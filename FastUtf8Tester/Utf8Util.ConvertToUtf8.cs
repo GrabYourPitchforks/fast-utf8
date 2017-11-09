@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers.Text;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
@@ -6,6 +7,12 @@ namespace FastUtf8Tester
 {
     internal static partial class Utf8Util
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int GetIndexOfFirstInvalidByte(ReadOnlySpan<byte> input)
+        {
+            return Utf8Utility.GetIndexOfFirstInvalidUtf8Sequence(input);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static byte[] CreateValidUtf8StringFromPossiblyInvalidUtf8Input(ReadOnlySpan<byte> input, bool suppressCreationIfInputIsValid = false)
         {

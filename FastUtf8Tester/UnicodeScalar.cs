@@ -1,8 +1,10 @@
-﻿using System;
+﻿// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
-namespace FastUtf8Tester
+namespace System.Buffers.Text
 {
     /// <summary>
     /// Represents a 24-bit Unicode scalar value.
@@ -31,7 +33,7 @@ namespace FastUtf8Tester
             // None of the APIs on this type are guaranteed to produce correct results
             // if we don't validate the input during construction.
 
-            if (Utf8Util.IsSurrogateFast(Value))
+            if (Utf8Util.IsLowWordSurrogate(Value))
             {
                 throw new ArgumentOutOfRangeException(
                    message: "Value must be between U+0000 and U+D7FF, inclusive; or value must be between U+E000 and U+FFFF, inclusive.",
@@ -267,7 +269,7 @@ namespace FastUtf8Tester
         }
 
         private static bool IsValidScalar(uint value) =>
-            (value < 0xD800U) || Utf8Util.IsWithinRangeInclusive(value, 0xE000U, 0x10FFFFU);
+            (value < 0xD800U) || Utf8Util.IsInRangeInclusive(value, 0xE000U, 0x10FFFFU);
 
         public override string ToString()
         {
