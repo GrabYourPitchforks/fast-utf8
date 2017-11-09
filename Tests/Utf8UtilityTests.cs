@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using FastUtf8Tester;
+using Tests;
 using Xunit;
 
-namespace Tests
+namespace System.Buffers.Text
 {
     public class Utf8UtilityTests
     {

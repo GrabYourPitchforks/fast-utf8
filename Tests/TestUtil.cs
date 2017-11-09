@@ -1,6 +1,4 @@
-using System;
-
-namespace Tests
+namespace System.Buffers.Text
 {
     public static class TestUtil
     {
