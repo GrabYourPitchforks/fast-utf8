@@ -77,12 +77,12 @@ namespace FastUtf8Tester
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        internal static int GetIndexOfFirstInvalidUtf8Sequence(ref byte inputBuffer, int inputLength, out int runeCount, out int surrogatePairCount)
+        internal static int GetIndexOfFirstInvalidUtf8Sequence(ref byte inputBuffer, int inputLength, out int scalarCount, out int surrogatePairCount)
         {
             // The fields below control where we read from the buffer.
 
             IntPtr inputBufferCurrentOffset = IntPtr.Zero;
-            int tempRuneCount = inputLength;
+            int tempScalarCount = inputLength;
             int tempSurrogatePairCount = 0;
 
             // If the sequence is long enough, try running vectorized "is this sequence ASCII?"
@@ -269,7 +269,7 @@ namespace FastUtf8Tester
                         // We have two runs of two bytes each.
                         inputBufferCurrentOffset += 4;
                         inputBufferRemainingBytes -= 4;
-                        tempRuneCount -= 2; // 4 bytes -> 2 runes
+                        tempScalarCount -= 2; // 4 bytes -> 2 scalars
 
                         if (inputBufferRemainingBytes >= sizeof(uint))
                         {
@@ -338,13 +338,13 @@ namespace FastUtf8Tester
                         {
                             inputBufferCurrentOffset += 4; // a 2-byte sequence + 2 ASCII bytes
                             inputBufferRemainingBytes -= 4; // a 2-byte sequence + 2 ASCII bytes
-                            tempRuneCount--; // 2-byte sequence + 2 ASCII bytes -> 3 runes
+                            tempScalarCount--; // 2-byte sequence + 2 ASCII bytes -> 3 scalars
                         }
                         else
                         {
                             inputBufferCurrentOffset += 3; // a 2-byte sequence + 1 ASCII byte
                             inputBufferRemainingBytes -= 3; // a 2-byte sequence + 1 ASCII byte
-                            tempRuneCount--; // 2-byte sequence + 1 ASCII bytes -> 2 runes
+                            tempScalarCount--; // 2-byte sequence + 1 ASCII bytes -> 2 scalars
 
                             // A two-byte sequence followed by an ASCII byte followed by a non-ASCII byte.
                             // Read in the next DWORD and jump directly to the start of the multi-byte processing block.
@@ -360,7 +360,7 @@ namespace FastUtf8Tester
                     {
                         inputBufferCurrentOffset += 2;
                         inputBufferRemainingBytes -= 2;
-                        tempRuneCount--; // 2-byte sequence -> 1 rune
+                        tempScalarCount--; // 2-byte sequence -> 1 scalar
                     }
 
                     continue;
@@ -410,7 +410,7 @@ namespace FastUtf8Tester
 
                     inputBufferCurrentOffset += 3;
                     inputBufferRemainingBytes -= 3;
-                    tempRuneCount -= 2; // 3 bytes -> 1 rune
+                    tempScalarCount -= 2; // 3 bytes -> 1 scalar
 
                     // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
                     // in to the text. If this happens strip it off now before seeing if the next character
@@ -473,7 +473,7 @@ namespace FastUtf8Tester
 
                             inputBufferCurrentOffset += 9;
                             inputBufferRemainingBytes -= 9;
-                            tempRuneCount -= 6; // 9 bytes -> 3 runes
+                            tempScalarCount -= 6; // 9 bytes -> 3 scalars
                             goto SuccessfullyProcessedThreeByteSequence;
                         }
 
@@ -507,7 +507,7 @@ namespace FastUtf8Tester
 
                             inputBufferCurrentOffset += 6;
                             inputBufferRemainingBytes -= 6;
-                            tempRuneCount -= 4; // 6 bytes -> 2 runes
+                            tempScalarCount -= 4; // 6 bytes -> 2 scalars
 
                             // The next char in the sequence didn't have a 3-byte marker, so it's probably
                             // an ASCII character. Jump back to the beginning of loop processing.
@@ -592,7 +592,7 @@ namespace FastUtf8Tester
 
                     inputBufferCurrentOffset += 4;
                     inputBufferRemainingBytes -= 4;
-                    tempRuneCount -= 3; // 4 bytes -> 1 rune
+                    tempScalarCount -= 3; // 4 bytes -> 1 scalar
                     tempSurrogatePairCount++; // 4 bytes implies UTF16 surrogate pair
 
                     continue; // go back to beginning of loop for processing
@@ -623,7 +623,7 @@ namespace FastUtf8Tester
                         {
                             inputBufferCurrentOffset += 2;
                             inputBufferRemainingBytes -= 2;
-                            tempRuneCount--; // 2 bytes -> 1 rune
+                            tempScalarCount--; // 2 bytes -> 1 scalar
                             continue;
                         }
                     }
@@ -649,7 +649,7 @@ namespace FastUtf8Tester
                             {
                                 inputBufferCurrentOffset += 3;
                                 inputBufferRemainingBytes -= 3;
-                                tempRuneCount -= 2; // 3 bytes -> 1 rune
+                                tempScalarCount -= 2; // 3 bytes -> 1 scalar
                                 continue;
                             }
                         }
@@ -663,7 +663,7 @@ namespace FastUtf8Tester
 
             // If we reached this point, we're out of data, and we saw no bad UTF8 sequence.
 
-            runeCount = tempRuneCount;
+            scalarCount = tempScalarCount;
             surrogatePairCount = tempSurrogatePairCount;
             return -1;
 
@@ -671,7 +671,7 @@ namespace FastUtf8Tester
 
             Error:
 
-            runeCount = tempRuneCount - inputBufferRemainingBytes; // we assumed earlier each byte corresponded to a single rune, perform fixup now to account for unread bytes
+            scalarCount = tempScalarCount - inputBufferRemainingBytes; // we assumed earlier each byte corresponded to a single scalar, perform fixup now to account for unread bytes
             surrogatePairCount = tempSurrogatePairCount;
             return IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
         }
