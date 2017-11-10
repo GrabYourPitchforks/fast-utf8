@@ -158,7 +158,8 @@ namespace System.Buffers.Text
                             WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisDWord);
                             inputBufferCurrentOffset += 4;
                             outputBufferCurrentOffset += 4;
-                        } else
+                        }
+                        else
                         {
                             goto LoopTerminatedEarlyDueToNonAsciiData;
                         }
