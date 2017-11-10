@@ -10,6 +10,13 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 
 167,546 UTF-8 bytes => 167,546 UTF-16 chars
 
+### Convert UTF-8 to UTF-16
+
+* in-box decoder: 2.88 sec
+* new decoder: 0.61 sec
+
+79% reduction in runtime
+
 ### Get UTF-16 char count from UTF-8 input
 
 * in-box decoder: 0.60 sec
@@ -20,6 +27,13 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 ## English (UTF8, some 3-byte chars)
 
 173,592 UTF-8 bytes => 167,552 UTF-16 chars
+
+### Convert UTF-8 to UTF-16
+
+* in-box decoder: 5.24 sec
+* new decoder: 5.90 sec
+
+12% increase in runtime
 
 ### Get UTF-16 char count from UTF-8 input
 
@@ -32,6 +46,13 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 
 102,245 UTF-8 bytes => 66,808 UTF-16 chars
 
+### Convert UTF-8 to UTF-16
+
+* in-box decoder: 6.81 sec
+* new decoder: 5.55 sec
+
+18% reduction in runtime
+
 ### Get UTF-16 char count from UTF-8 input
 
 * in-box decoder: 6.60 sec
@@ -43,6 +64,13 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 
 131,761 UTF-8 bytes => 84,663 UTF-16 chars
 
+### Convert UTF-8 to UTF-16
+
+* in-box decoder: 10.38 sec
+* new decoder: 8.88 sec
+
+14% reduction in runtime
+
 ### Get UTF-16 char count from UTF-8 input
 
 * in-box decoder: 10.13 sec
@@ -53,6 +81,13 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 ## Chinese (mostly 3-byte chars)
 
 180,651 UTF-8 bytes => 77,967 UTF-16 chars
+
+### Convert UTF-8 to UTF-16
+
+* in-box decoder: 9.05 sec
+* new decoder: 6.87 sec
+
+24% reduction in runtime
 
 ### Get UTF-16 char count from UTF-8 input
 

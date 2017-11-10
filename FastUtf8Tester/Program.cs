@@ -77,7 +77,7 @@ namespace FastUtf8Tester
                 stopwatch.Restart();
                 for (int j = 0; j < NUM_ITERS; j++)
                 {
-                    Encoding.UTF8.GetCharCount(asBytes);
+                    Encoding.UTF8.GetChars(asBytes, asChars);
                 }
                 Console.WriteLine($"Elapsed: {stopwatch.Elapsed}");
             }
@@ -94,11 +94,11 @@ namespace FastUtf8Tester
                 throw new Exception("Didn't decode properly!");
             }
 
-            // Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
-            //if (new String(asChars) != lipsum)
-            //{
-            ////    throw new Exception("Didn't decode properly!");
-            //}
+            int numChars = Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
+            if (new String(asChars) != lipsum || numChars != lipsum.Length)
+            {
+                throw new Exception("Didn't decode properly!");
+            }
             Array.Clear(asChars, 0, asChars.Length);
 
             var stopwatch = new Stopwatch();
@@ -108,7 +108,7 @@ namespace FastUtf8Tester
                 stopwatch.Restart();
                 for (int j = 0; j < NUM_ITERS; j++)
                 {
-                    Utf8Utility.TryGetUtf16CharCount(asBytes, out _);
+                    Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
                 }
                 Console.WriteLine($"Elapsed: {stopwatch.Elapsed}");
             }
