@@ -3,63 +3,54 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
-namespace FastUtf8Tester
+namespace System.Buffers.Text
 {
     internal static partial class Utf8Util
     {
-        // This method will convert as many ASCII bytes as possible using vectorized
-        // widening instructions. Returns the total number of bytes / chars converted.
-        // May return 0 if no bytes / chars can be converted. There may also be more
-        // ASCII data remaining in the buffer.
+        // This method will convert as many ASCII bytes as it can using fast vectorized processing, returning the number of
+        // consumed (ASCII) bytes. It's possible that the method exits early, perhaps because there is some non-ASCII byte
+        // later in the sequence or because we're running out of input to search. The intent is that the caller *skips over*
+        // the number of bytes returned by this method, then it continues data processing from the next byte.
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int ConvertAsciiBytesVectorized(ref byte inputBuffer, int inputBufferLength, ref char outputBuffer, int outputBufferLength)
+        private static IntPtr ConvertAsciiBytesVectorized(ref byte inputBuffer, int inputBufferLength, ref char outputBuffer, int outputBufferLength)
         {
+            // Only allow vectorization if vectors are hardware-accelerated and we have enough
+            // data to allow a vectorized conversion.
+
             if (!Vector.IsHardwareAccelerated)
             {
-                return 0;
+                return IntPtr.Zero;
             }
 
-            // First, make sure we can perform at least one vectorized operation.
-
-            int maxIterCount = Math.Min(inputBufferLength, outputBufferLength) / Vector<byte>.Count;
-            if (maxIterCount == 0)
-            {
-                return 0;
-            }
-
-            // Next, calculate the last offset at which we'll be able to perform a
-            // read / write operation without overruning the buffers. Both the read
-            // and write buffers can share a single offset value since we adjust by
-            // the buffer's element width on data access.
+            // We won't bother checking for alignment. The JITter will generate VMOVUPD instructions, which will work
+            // regardless of whether the memory access is aligned. Vector memory accesses are faster when aligned,
+            // but the execution time is dominated by the widening operation rather than the processor internally
+            // fixing up misalignments.
 
             IntPtr currentOffset = IntPtr.Zero;
-            IntPtr finalAllowedOffset = (IntPtr)((maxIterCount - 1) * Vector<byte>.Count);
+            IntPtr finalOffsetAtWhichCanConvert = (IntPtr)(Math.Min(inputBufferLength, outputBufferLength) - Vector<byte>.Count);
 
-            Vector<byte> highBitMask = new Vector<byte>((byte)0x80);
-            while (IntPtrIsLessThanOrEqualTo(currentOffset, finalAllowedOffset))
+            Vector<byte> mask = new Vector<byte>((byte)0x80);
+            for (; IntPtrIsLessThanOrEqualTo(currentOffset, finalOffsetAtWhichCanConvert); currentOffset += Vector<byte>.Count)
             {
                 Vector<byte> inputVector = Unsafe.ReadUnaligned<Vector<byte>>(ref Unsafe.Add(ref inputBuffer, currentOffset));
-                if ((inputVector & highBitMask) == Vector<byte>.Zero)
+                if ((inputVector & mask) != Vector<byte>.Zero)
                 {
-                    // Input vector of all-ASCII bytes. Widen and write back to the output.
-                    // Widening operations are endianness-agnostic.
-
-                    // TODO: Vector.Widen is fast than non-vectorized code but still isn't implemented efficiently.
-                    // Ideally this would be implemented via VPMOVZXBW or similar intrinsic for best performance.
-
-                    Vector.Widen(inputVector, out var widenedVectorHigh, out var widenedVectorLow);
-                    Unsafe.WriteUnaligned<Vector<ushort>>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, currentOffset)), widenedVectorHigh);
-                    Unsafe.WriteUnaligned<Vector<ushort>>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, currentOffset + Vector<ushort>.Count)), widenedVectorLow);
-                    currentOffset += Vector<byte>.Count;
+                    break; // non-ASCII data incoming
                 }
-                else
-                {
-                    // Saw non-ASCII data in the stream; couldn't perform widening operation.
-                    break;
-                }
+
+                // Input vector of all-ASCII bytes. Widen and write back to the output.
+                // Widening operations are endianness-agnostic.
+
+                // TODO: Vector.Widen is fast than non-vectorized code but still isn't implemented efficiently.
+                // Ideally this would be implemented via VPMOVZXBW or similar intrinsic for best performance.
+
+                Vector.Widen(inputVector, out var widenedVectorHigh, out var widenedVectorLow);
+                Unsafe.WriteUnaligned<Vector<ushort>>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, currentOffset)), widenedVectorHigh);
+                Unsafe.WriteUnaligned<Vector<ushort>>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, currentOffset + Vector<ushort>.Count)), widenedVectorLow);
             }
 
-            return IntPtrToInt32NoOverflowCheck(currentOffset); // number of bytes successfully converted
+            return currentOffset;
         }
 
         /// <summary>
@@ -84,11 +75,12 @@ namespace FastUtf8Tester
         {
             // The fields below control where we read from / write to the buffer.
 
+            IntPtr inputBufferCurrentOffset = IntPtr.Zero;
+
             // If the sequence is long enough, try running vectorized "is this sequence ASCII?"
             // logic. We perform a small test of the first few bytes to make sure they're all
             // ASCII before we incur the cost of invoking the vectorized code path.
 
-            IntPtr inputBufferCurrentOffset = IntPtr.Zero;
             if (Vector.IsHardwareAccelerated)
             {
                 if (IntPtr.Size >= 8)
@@ -96,9 +88,9 @@ namespace FastUtf8Tester
                     // Test first 16 bytes and check for all-ASCII.
                     if (2 * sizeof(ulong) <= Vector<byte>.Count)
                     {
-                        if ((Math.Min(inputLength, outputLength) >= 2 * Vector<byte>.Count) && Utf8QWordAllBytesAreAscii(ReadAndFoldTwoQWords(ref inputBuffer)))
+                        if ((Math.Min(inputLength, outputLength) >= 2 * Vector<byte>.Count) && QWordAllBytesAreAscii(ReadAndFoldTwoQWordsUnaligned(ref inputBuffer)))
                         {
-                            inputBufferCurrentOffset = (IntPtr)ConvertAsciiBytesVectorized(ref inputBuffer, inputLength, ref outputBuffer, outputLength);
+                            inputBufferCurrentOffset = ConvertAsciiBytesVectorized(ref inputBuffer, inputLength, ref outputBuffer, outputLength);
                         }
                     }
                 }
@@ -107,19 +99,18 @@ namespace FastUtf8Tester
                     // Test first 8 bytes and check for all-ASCII.
                     if (2 * sizeof(uint) <= Vector<byte>.Count)
                     {
-                        if ((Math.Min(inputLength, outputLength) >= 2 * Vector<byte>.Count) && Utf8DWordAllBytesAreAscii(ReadAndFoldTwoDWords(ref inputBuffer)))
+                        if ((Math.Min(inputLength, outputLength) >= 2 * Vector<byte>.Count) && DWordAllBytesAreAscii(ReadAndFoldTwoDWordsUnaligned(ref inputBuffer)))
                         {
-                            inputBufferCurrentOffset = (IntPtr)ConvertAsciiBytesVectorized(ref inputBuffer, inputLength, ref outputBuffer, outputLength);
+                            inputBufferCurrentOffset = ConvertAsciiBytesVectorized(ref inputBuffer, inputLength, ref outputBuffer, outputLength);
                         }
                     }
                 }
             }
 
-            IntPtr inputBufferOffsetAtWhichToAllowUnrolling = IntPtr.Zero;
-            int inputBufferRemainingBytes = inputLength - IntPtrToInt32NoOverflowCheck(inputBufferCurrentOffset);
+            int inputBufferRemainingBytes = inputLength - ConvertIntPtrToInt32WithoutOverflowCheck(inputBufferCurrentOffset);
 
             IntPtr outputBufferCurrentOffset = inputBufferCurrentOffset;
-            int remainingOutputBufferSize = outputLength - IntPtrToInt32NoOverflowCheck(outputBufferCurrentOffset);
+            int outputBufferRemainingChars = outputLength - ConvertIntPtrToInt32WithoutOverflowCheck(outputBufferCurrentOffset);
 
             // Begin the main loop.
 
@@ -129,8 +120,6 @@ namespace FastUtf8Tester
 
             while (inputBufferRemainingBytes >= sizeof(uint))
             {
-                BeforeReadDWord:
-
                 // Read 32 bits at a time. This is enough to hold any possible UTF8-encoded scalar.
 
                 Debug.Assert(inputLength - (int)inputBufferCurrentOffset >= sizeof(uint));
@@ -149,80 +138,61 @@ namespace FastUtf8Tester
                 {
                     // We read an all-ASCII sequence.
 
-                    if (remainingOutputBufferSize < sizeof(uint)) { goto ProcessRemainingBytesSlow; } // running out of space, but may be able to write some data
+                    if (outputBufferRemainingChars < sizeof(uint)) { goto ProcessRemainingBytesSlow; } // running out of space, but may be able to write some data
 
                     WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisDWord);
                     inputBufferCurrentOffset += 4;
                     inputBufferRemainingBytes -= 4;
                     outputBufferCurrentOffset += 4;
-                    remainingOutputBufferSize -= 4;
+                    outputBufferRemainingChars -= 4;
 
                     // If we saw a sequence of all ASCII, there's a good chance a significant amount of following data is also ASCII.
                     // Below is basically unrolled loops with poor man's vectorization.
 
-                    if (IntPtrIsLessThan(inputBufferCurrentOffset, inputBufferOffsetAtWhichToAllowUnrolling))
+                    int maxIters = Math.Min(inputBufferRemainingBytes, outputBufferRemainingChars) / (2 * sizeof(uint));
+                    for (int i = 0; i < maxIters; i++)
                     {
-                        // We saw non-ASCII data last time we tried loop unrolling, so don't bother going
-                        // down the unrolling path again until we've bypassed that data. No need to perform
-                        // a bounds check here since we already checked the bounds as part of the loop unrolling path.
-                        goto BeforeReadDWord;
-                    }
-                    else
-                    {
-                        if (IntPtr.Size >= 8)
+                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        if (Utf8DWordAllBytesAreAscii(thisDWord))
                         {
-                            // Try converting 16 ASCII bytes to chars at a time.
+                            WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisDWord);
+                            inputBufferCurrentOffset += 4;
+                            outputBufferCurrentOffset += 4;
+                        } else
+                        {
+                            goto LoopTerminatedEarlyDueToNonAsciiData;
+                        }
 
-                            int iterCount = Math.Min(inputBufferRemainingBytes, remainingOutputBufferSize) / (2 * sizeof(ulong));
-                            while (iterCount-- != 0)
-                            {
-                                ulong thisQWord1 = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                                ulong thisQWord2 = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong)));
-                                if (!Utf8QWordAllBytesAreAscii(thisQWord1 | thisQWord2))
-                                {
-                                    inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset; // non-ASCII data incoming
-                                    thisDWord = (uint)thisQWord1;
-                                    goto AfterReadDWord;
-                                }
-
-                                WritePackedQWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisQWord1);
-                                WritePackedQWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + sizeof(ulong)), thisQWord2);
-
-                                inputBufferCurrentOffset += 2 * sizeof(ulong);
-                                inputBufferRemainingBytes -= 2 * sizeof(ulong);
-                                outputBufferCurrentOffset += 2 * sizeof(ulong);
-                                remainingOutputBufferSize -= 2 * sizeof(ulong);
-                            }
+                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        if (Utf8DWordAllBytesAreAscii(thisDWord))
+                        {
+                            WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisDWord);
+                            inputBufferCurrentOffset += 4;
+                            outputBufferCurrentOffset += 4;
                         }
                         else
                         {
-                            // Try converting 8 ASCII bytes to chars at a time.
-
-                            int iterCount = Math.Min(inputBufferRemainingBytes, remainingOutputBufferSize) / (2 * sizeof(uint));
-                            while (iterCount-- != 0)
-                            {
-                                uint thisDWord1 = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
-                                uint thisDWord2 = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(uint)));
-                                if (!Utf8QWordAllBytesAreAscii(thisDWord1 | thisDWord2))
-                                {
-                                    inputBufferOffsetAtWhichToAllowUnrolling = inputBufferCurrentOffset; // non-ASCII data incoming
-                                    thisDWord = (uint)thisDWord1;
-                                    goto AfterReadDWord;
-                                }
-
-                                WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset), thisDWord1);
-                                WritePackedDWordAsChars(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset + sizeof(ulong)), thisDWord2);
-
-                                inputBufferCurrentOffset += 2 * sizeof(uint);
-                                inputBufferRemainingBytes -= 2 * sizeof(uint);
-                                outputBufferCurrentOffset += 2 * sizeof(uint);
-                                remainingOutputBufferSize -= 2 * sizeof(uint);
-                            }
+                            goto LoopTerminatedEarlyDueToNonAsciiData;
                         }
                     }
 
-                    continue;
+                    inputBufferRemainingBytes = inputLength - ConvertIntPtrToInt32WithoutOverflowCheck(inputBufferCurrentOffset);
+                    outputBufferRemainingChars = outputLength - ConvertIntPtrToInt32WithoutOverflowCheck(outputBufferCurrentOffset);
+                    continue; // need to perform a bounds check because we might be running out of data
+
+                    LoopTerminatedEarlyDueToNonAsciiData:
+
+                    // We know that there's *at least* one DWORD of data remaining in the buffer.
+                    // We also know that it's not all-ASCII. We can skip the logic at the beginning of the main loop.
+
+                    inputBufferRemainingBytes = inputLength - ConvertIntPtrToInt32WithoutOverflowCheck(inputBufferCurrentOffset);
+                    outputBufferRemainingChars = outputLength - ConvertIntPtrToInt32WithoutOverflowCheck(outputBufferCurrentOffset);
+                    goto AfterReadDWordSkipAllBytesAsciiCheck;
                 }
+
+                AfterReadDWordSkipAllBytesAsciiCheck:
+
+                Debug.Assert(!DWordAllBytesAreAscii(thisDWord)); // this should have been handled earlier
 
                 // Next, try stripping off ASCII bytes one at a time.
                 // We only handle up to three ASCII bytes here since we handled the four ASCII byte case above.
@@ -237,7 +207,7 @@ namespace FastUtf8Tester
                         if (Utf8DWordThirdByteIsAscii(thisDWord))
                         {
                             // Want to copy three characters to output buffer
-                            if (remainingOutputBufferSize < 3) { goto ProcessRemainingBytesSlow; }
+                            if (outputBufferRemainingChars < 3) { goto ProcessRemainingBytesSlow; }
 
                             if (BitConverter.IsLittleEndian)
                             {
@@ -257,11 +227,11 @@ namespace FastUtf8Tester
                             inputBufferCurrentOffset += 3;
                             inputBufferRemainingBytes -= 3;
                             outputBufferCurrentOffset += 3;
-                            remainingOutputBufferSize -= 3;
+                            outputBufferRemainingChars -= 3;
                         }
                         else
                         {
-                            if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; }
+                            if (outputBufferRemainingChars < 2) { goto ProcessRemainingBytesSlow; }
 
                             if (BitConverter.IsLittleEndian)
                             {
@@ -279,12 +249,12 @@ namespace FastUtf8Tester
                             inputBufferCurrentOffset += 2;
                             inputBufferRemainingBytes -= 2;
                             outputBufferCurrentOffset += 2;
-                            remainingOutputBufferSize -= 2;
+                            outputBufferRemainingChars -= 2;
                         }
                     }
                     else
                     {
-                        if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                        if (outputBufferRemainingChars == 0) { goto OutputBufferTooSmall; }
 
                         if (BitConverter.IsLittleEndian)
                         {
@@ -298,7 +268,7 @@ namespace FastUtf8Tester
                         inputBufferCurrentOffset += 1;
                         inputBufferRemainingBytes -= 1;
                         outputBufferCurrentOffset += 1;
-                        remainingOutputBufferSize -= 1;
+                        outputBufferRemainingChars -= 1;
                     }
 
                     if (inputBufferRemainingBytes < sizeof(uint))
@@ -347,7 +317,7 @@ namespace FastUtf8Tester
 
                         // We have two runs of two bytes each.
 
-                        if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; } // running out of output buffer
+                        if (outputBufferRemainingChars < 2) { goto ProcessRemainingBytesSlow; } // running out of output buffer
 
                         Unsafe.WriteUnaligned<uint>(
                             ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
@@ -356,7 +326,7 @@ namespace FastUtf8Tester
                         inputBufferCurrentOffset += 4;
                         inputBufferRemainingBytes -= 4;
                         outputBufferCurrentOffset += 2;
-                        remainingOutputBufferSize -= 2;
+                        outputBufferRemainingChars -= 2;
 
                         if (inputBufferRemainingBytes >= sizeof(uint))
                         {
@@ -427,7 +397,7 @@ namespace FastUtf8Tester
                         if (Utf8DWordFourthByteIsAscii(thisDWord))
                         {
                             // 2-byte sequence + 2 ASCII bytes
-                            if (remainingOutputBufferSize < 3) { goto ProcessRemainingBytesSlow; } // running out of room
+                            if (outputBufferRemainingChars < 3) { goto ProcessRemainingBytesSlow; } // running out of room
 
                             tempOutputBuffer = ExtractCharFromFirstTwoByteSequence(thisDWord);
                             if (BitConverter.IsLittleEndian)
@@ -445,12 +415,12 @@ namespace FastUtf8Tester
                             inputBufferCurrentOffset += 4;
                             inputBufferRemainingBytes -= 4;
                             outputBufferCurrentOffset += 3;
-                            remainingOutputBufferSize -= 3;
+                            outputBufferRemainingChars -= 3;
                         }
                         else
                         {
                             // 2-byte sequence + 1 ASCII byte
-                            if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; } // running out of room
+                            if (outputBufferRemainingChars < 2) { goto ProcessRemainingBytesSlow; } // running out of room
 
                             tempOutputBuffer = ExtractCharFromFirstTwoByteSequence(thisDWord);
                             if (BitConverter.IsLittleEndian)
@@ -466,7 +436,7 @@ namespace FastUtf8Tester
                             inputBufferCurrentOffset += 3;
                             inputBufferRemainingBytes -= 3;
                             outputBufferCurrentOffset += 2;
-                            remainingOutputBufferSize -= 2;
+                            outputBufferRemainingChars -= 2;
 
                             // A two-byte sequence followed by an ASCII byte followed by a non-ASCII byte.
                             // Read in the next DWORD and jump directly to the start of the multi-byte processing block.
@@ -480,14 +450,14 @@ namespace FastUtf8Tester
                     }
                     else
                     {
-                        if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; } // running out of room
+                        if (outputBufferRemainingChars == 0) { goto OutputBufferTooSmall; } // running out of room
 
                         Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = ExtractCharFromFirstTwoByteSequence(thisDWord);
 
                         inputBufferCurrentOffset += 2;
                         inputBufferRemainingBytes -= 2;
                         outputBufferCurrentOffset += 1;
-                        remainingOutputBufferSize -= 1;
+                        outputBufferRemainingChars -= 1;
                     }
 
                     continue;
@@ -540,7 +510,7 @@ namespace FastUtf8Tester
                     if (Utf8DWordFourthByteIsAscii(thisDWord))
                     {
                         // 3-byte sequence + ASCII byte
-                        if (remainingOutputBufferSize < 2) { goto ProcessRemainingBytesSlow; }
+                        if (outputBufferRemainingChars < 2) { goto ProcessRemainingBytesSlow; }
 
                         uint toWrite = ExtractTwoCharsPackedFromThreeByteSequenceFollowedByAsciiByte(thisDWord);
                         Unsafe.WriteUnaligned<uint>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)), toWrite);
@@ -548,19 +518,19 @@ namespace FastUtf8Tester
                         inputBufferCurrentOffset += 4;
                         inputBufferRemainingBytes -= 4;
                         outputBufferCurrentOffset += 2;
-                        remainingOutputBufferSize -= 2;
+                        outputBufferRemainingChars -= 2;
                     }
                     else
                     {
                         // 3-byte sequence, no trailing ASCII byte
-                        if (remainingOutputBufferSize == 0) { goto OutputBufferTooSmall; }
+                        if (outputBufferRemainingChars == 0) { goto OutputBufferTooSmall; }
 
                         char toWrite = ExtractCharFromFirstThreeByteSequence(thisDWord);
                         Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)toWrite;
                         inputBufferCurrentOffset += 3;
                         inputBufferRemainingBytes -= 3;
                         outputBufferCurrentOffset += 1;
-                        remainingOutputBufferSize -= 1;
+                        outputBufferRemainingChars -= 1;
                     }
 
                     if (inputBufferRemainingBytes >= sizeof(uint))
@@ -626,7 +596,7 @@ namespace FastUtf8Tester
 
                     // Validation complete.
 
-                    if (remainingOutputBufferSize < 2) { goto OutputBufferTooSmall; }
+                    if (outputBufferRemainingChars < 2) { goto OutputBufferTooSmall; }
 
                     Unsafe.WriteUnaligned(
                         destination: ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset)),
@@ -635,7 +605,7 @@ namespace FastUtf8Tester
                     inputBufferCurrentOffset += 4;
                     inputBufferRemainingBytes -= 4;
                     outputBufferCurrentOffset += 2;
-                    remainingOutputBufferSize -= 2;
+                    outputBufferRemainingChars -= 2;
 
                     continue; // go back to beginning of loop for processing
                 }
@@ -645,7 +615,7 @@ namespace FastUtf8Tester
 
             while (inputBufferRemainingBytes > 0)
             {
-                if (remainingOutputBufferSize == 0)
+                if (outputBufferRemainingChars == 0)
                 {
                     goto OutputBufferTooSmall;
                 }
@@ -659,7 +629,7 @@ namespace FastUtf8Tester
                     inputBufferRemainingBytes--;
                     Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)firstByte;
                     outputBufferCurrentOffset += 1;
-                    remainingOutputBufferSize -= 1;
+                    outputBufferRemainingChars -= 1;
                     continue;
                 }
                 else if (inputBufferRemainingBytes >= 2)
@@ -674,7 +644,7 @@ namespace FastUtf8Tester
                             inputBufferRemainingBytes -= 2;
                             Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)GenerateUtf16CodeUnitFromUtf8CodeUnits(firstByte, secondByte);
                             outputBufferCurrentOffset += 1;
-                            remainingOutputBufferSize -= 1;
+                            outputBufferRemainingChars -= 1;
                             continue;
                         }
                     }
@@ -702,7 +672,7 @@ namespace FastUtf8Tester
                                 inputBufferRemainingBytes -= 3;
                                 Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset) = (char)GenerateUtf16CodeUnitFromUtf8CodeUnits(firstByte, secondByte, thirdByte);
                                 outputBufferCurrentOffset += 1;
-                                remainingOutputBufferSize -= 1;
+                                outputBufferRemainingChars -= 1;
                                 continue;
                             }
                         }

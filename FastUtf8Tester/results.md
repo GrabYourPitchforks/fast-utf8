@@ -31,9 +31,9 @@ Also tested various offsets so that input and output buffers weren't aligned, bu
 ### Convert UTF-8 to UTF-16
 
 * in-box decoder: 5.24 sec
-* new decoder: 5.90 sec
+* new decoder: 5.16 sec
 
-12% increase in runtime
+1% reduction in runtime
 
 ### Get UTF-16 char count from UTF-8 input
 

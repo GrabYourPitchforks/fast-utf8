@@ -3,7 +3,7 @@ using System.Buffers.Text;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
-namespace FastUtf8Tester
+namespace System.Buffers.Text
 {
     internal static partial class Utf8Util
     {

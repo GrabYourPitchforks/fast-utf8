@@ -2,15 +2,10 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
-namespace FastUtf8Tester
+namespace System.Buffers.Text
 {
     internal static partial class Utf8Util
     {
-        // JITter is smart enough to turn this into ROL / ROR instruction
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint ROL32(uint value, int shift)
-            => (value << shift) | (value >> (32 - shift));
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static uint CountNumberOfLeadingAsciiBytesUpToThree(uint value)
         {
@@ -55,11 +50,7 @@ namespace FastUtf8Tester
                 return numAsciiBytes;
             }
         }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static unsafe int GetNumberOfBytesToNextDWordAlignment(ref byte @ref)
-            => (int)((uint)sizeof(uint) - ((uint)Unsafe.AsPointer(ref @ref) % sizeof(uint)));
-
+        
         // Assuming 'buffer' points to the start of an invalid sequence, returns the length (in bytes)
         // of the invalid sequence.
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -135,10 +126,7 @@ namespace FastUtf8Tester
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private unsafe static bool IntPtrIsLessThan(IntPtr a, IntPtr b) => (a.ToPointer() < b.ToPointer());
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe static bool IntPtrIsLessThanOrEqualTo(IntPtr a, IntPtr b) => (a.ToPointer() <= b.ToPointer());
-
+        
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int IntPtrToInt32NoOverflowCheck(IntPtr value)
         {

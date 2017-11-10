@@ -387,7 +387,11 @@ namespace System.Buffers.Text
         /// Returns <see langword="true"/> iff (<paramref name="a"/> &lt;= <paramref name="b"/>).
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private unsafe static bool IntPtrIsLessThanOrEqualTo(IntPtr a, IntPtr b) => (a.ToPointer() <= b.ToPointer());
+        private unsafe static bool IntPtrIsLessThanOrEqualTo(IntPtr a, IntPtr b)
+        {
+            return (IntPtr.Size >= 8 && ((long)a <= (long)b))
+                || (IntPtr.Size < 8 && ((int)a <= (int)b));
+        }
 
         /// <summary>
         /// Returns <see langword="true"/> iff <paramref name="value"/> is between
