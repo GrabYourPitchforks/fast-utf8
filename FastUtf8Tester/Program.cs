@@ -9,7 +9,7 @@ namespace FastUtf8Tester
     class Program
     {
         private const int BATT_COUNT = 5;
-        private const int NUM_ITERS = 10_000;
+        private const int NUM_ITERS = 50_000;
 
         static void Main(string[] args)
         {
@@ -65,9 +65,9 @@ namespace FastUtf8Tester
         private static void TestSystemTextEncoding(string lipsum)
         {
             byte[] asBytes = Encoding.UTF8.GetBytes(lipsum);
-            char[] asChars = new char[Encoding.UTF8.GetCharCount(asBytes)];
+            Console.WriteLine($"{asBytes.Length} UTF-8 bytes => {lipsum.Length} UTF-16 chars");
 
-            Console.WriteLine(Encoding.UTF8.GetCharCount(asBytes));
+            char[] asChars = new char[Encoding.UTF8.GetCharCount(asBytes)];
             Encoding.UTF8.GetString(asBytes); // don't use return value, simply to ensure method is JITted
 
             var stopwatch = new Stopwatch();
@@ -86,14 +86,14 @@ namespace FastUtf8Tester
         private static void TestUtf8Util(string lipsum)
         {
             byte[] asBytes = Encoding.UTF8.GetBytes(lipsum);
-            char[] asChars = new char[Encoding.UTF8.GetCharCount(asBytes)];
+            Console.WriteLine($"{asBytes.Length} UTF-8 bytes => {lipsum.Length} UTF-16 chars");
 
-            if (!Utf8Utility.TryGetUtf16CharCount(asBytes, out int charCount))
+            char[] asChars = new char[Encoding.UTF8.GetCharCount(asBytes)];
+            if (!Utf8Utility.TryGetUtf16CharCount(asBytes, out int charCount) || charCount != lipsum.Length)
             {
                 throw new Exception("Didn't decode properly!");
             }
 
-            Console.WriteLine($"{charCount} UTF-16 code units");
             // Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
             //if (new String(asChars) != lipsum)
             //{

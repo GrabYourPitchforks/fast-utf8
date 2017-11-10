@@ -1,102 +1,62 @@
 # Perf results
 
-1,000,000 iterations on each lipsum
+50,000 iterations on each text
 
 Testbed: Intel(R) Core(TM) i7-6700 CPU @ 3.40GHz, 3408 Mhz, 8 Core(s), 8 Logical Processor(s), running AMD64 optimized
 
 Also tested various offsets so that input and output buffers weren't aligned, but didn't seem to affect results measurably.
 
-## English
+## English (ASCII)
 
-(3821 ASCII chars)
+167,546 UTF-8 bytes => 167,546 UTF-16 chars
 
-### UTF8 to UTF16
+### Get UTF-16 char count from UTF-8 input
 
-* `System.Text.Encoding.UTF8`: 1.22 sec
-* `Encodings.Utf8.ToUtf16`: 1.21 sec
-* `Utf8Util.ConvertUtf8ToUtf16`: 0.18 sec
+* in-box decoder: 0.60 sec
+* new decoder: 0.13 sec
 
-85% reduction in runtime
+78% reduction in runtime
 
-### Get UTF16 char count from UTF8
+## English (UTF8, some 3-byte chars)
 
-* `System.Text.Encoding.UTF8`: 0.286 sec
-* `Utf8Util.GetCharCount`: 0.077 sec
+173,592 UTF-8 bytes => 167,552 UTF-16 chars
 
-73% reduction in runtime
+### Get UTF-16 char count from UTF-8 input
 
-## Hebrew
+* in-box decoder: 3.39 sec
+* new decoder: 2.36 sec
 
-(5428 bytes = 3051 chars)
+30% reduction in runtime
 
-### UTF8 to UTF16
+## Cyrillic (mostly 2-byte chars)
 
-* `System.Text.Encoding.UTF8`: 5.13 sec
-* `Encodings.Utf8.ToUtf16`: 5.87 sec
-* `Utf8Util.ConvertUtf8ToUtf16`: 2.82 sec
+102,245 UTF-8 bytes => 66,808 UTF-16 chars
 
-45% - 50% reduction in runtime
+### Get UTF-16 char count from UTF-8 input
 
-### Get UTF16 char count from UTF8
+* in-box decoder: 6.60 sec
+* new decoder: 4.14 sec
 
-* `System.Text.Encoding.UTF8`: 5.22 sec
-* `Utf8Util.GetCharCount`: 1.81 sec
+37% reduction in runtime
 
-65% reduction in runtime
+## Greek (mostly 2-byte chars)
 
-## Cyrillic
+131,761 UTF-8 bytes => 84,663 UTF-16 chars
 
-(5402 byte = 3041 chars)
+### Get UTF-16 char count from UTF-8 input
 
-### UTF8 to UTF16
+* in-box decoder: 10.13 sec
+* new decoder: 7.16 sec
 
-* `System.Text.Encoding.UTF8`: 4.84 sec
-* `Encodings.Utf8.ToUtf16`: 4.98 sec
-* `Utf8Util.ConvertUtf8ToUtf16`: 2.80 sec
+30% reduction in runtime
 
-43% reduction in runtime
+## Chinese (mostly 3-byte chars)
 
-### Get UTF16 char count from UTF8
+180,651 UTF-8 bytes => 77,967 UTF-16 chars
 
-* `System.Text.Encoding.UTF8`: 5.20 sec
-* `Utf8Util.GetCharCount`: 1.78 sec
+### Get UTF-16 char count from UTF-8 input
 
-65% reduction in runtime
+* in-box decoder: 7.15 sec
+* new decoder: 3.78 sec
 
-## Japanese
-
-(4685 bytes = 1943 chars)
-
-### UTF8 to UTF16
-
-* `System.Text.Encoding.UTF8`: 4.30 sec _(old sample text)_
-* `Encodings.Utf8.ToUtf16`: 4.22 sec _(old sample text)_
-* `Utf8Util.ConvertUtf8ToUtf16`: 3.23 sec _(old sample text)_
-
-25% reduction in runtime
-
-### Get UTF16 char count from UTF8
-
-* `System.Text.Encoding.UTF8`: 3.06 sec
-* `Utf8Util.GetCharCount`: 1.08 sec
-
-65% reduction in runtime
-
-## Chinese
-
-(8252 bytes = 3624 chars)
-
-### UTF8 to UTF16
-
-* `System.Text.Encoding.UTF8`: 9.76 sec _(old sample text)_
-* `Encodings.Utf8.ToUtf16`: 9.57 sec _(old sample text)_
-* `Utf8Util.ConvertUtf8ToUtf16`: 5.53 sec _(old sample text)_
-
-45% reduction in runtime
-
-### Get UTF16 char count from UTF8
-
-* `System.Text.Encoding.UTF8`: 6.30 sec
-* `Utf8Util.GetCharCount`: 2.25 sec
-
-65% reduction in runtime
+47% reduction in runtime
