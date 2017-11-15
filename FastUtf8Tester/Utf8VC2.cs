@@ -61,7 +61,6 @@ namespace System.Buffers.Text
                             //                                F4  F3  F2  F1  F0  EF  EE  ED  EC  EB  EA  E9  E8  E7  E6  E5  E4  E3  E2  E1  E0
 
                             tempNewData = codeUnit & 0xF;
-                            codeUnit &= 0x1F;
                             uint newState = (uint)(NEW_STATE_LOOKUP >> (3 * (int)codeUnit)) & 0x7;
                             if (newState == 0) { goto Error; } // not within [ E0..F4 ], so within [ 80..C1 ] or [ F5..FF ], which are invalid leading bytes.
 
@@ -78,7 +77,6 @@ namespace System.Buffers.Text
                                 //                              EF EE ED EC EB EA E9 E8 E7 E6 E5 E4 E3 E2 E1 E0
 
                                 tempNewData = codeUnit;
-                                codeUnit &= 0xF;
                                 uint newState = (NEW_STATE_LOOKUP >> (2 * (int)codeUnit)) & 0x3;
 
                                 tempNewData |= newState << STATE_SHIFT;
@@ -146,7 +144,7 @@ namespace System.Buffers.Text
                         codeUnit ^= 0xA0;
                         if (codeUnit > (0xBF - 0xA0)) { goto Error; }
 
-                        tempNewData = (existingData << CONT_BYTE_SHIFT) | (codeUnit | 0x20) | (STATE_CONSUME_ONE_CONT_BYTE << STATE_SHIFT);
+                        tempNewData = (existingData << CONT_BYTE_SHIFT) | codeUnit | (0x20 | (STATE_CONSUME_ONE_CONT_BYTE << STATE_SHIFT));
                         goto Incomplete;
                     }
 
@@ -168,7 +166,7 @@ namespace System.Buffers.Text
                         codeUnit -= 0x90; // SUB less optimal than XOR but is required in this case
                         if (codeUnit > (0xBF - 0x90)) { goto Error; }
 
-                        tempNewData = (existingData << CONT_BYTE_SHIFT) | (codeUnit + 0x10) | (STATE_CONSUME_TWO_CONT_BYTES << STATE_SHIFT);
+                        tempNewData = ((existingData << CONT_BYTE_SHIFT) | codeUnit) + (0x10 | (STATE_CONSUME_TWO_CONT_BYTES << STATE_SHIFT));
                         goto Incomplete;
                     }
 
