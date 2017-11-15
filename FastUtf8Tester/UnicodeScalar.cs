@@ -247,6 +247,7 @@ namespace System.Buffers.Text
             }
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static UnicodeScalar CreateWithoutValidation(uint value) => new UnicodeScalar(value, null);
 
         public override bool Equals(object other) => ((other is UnicodeScalar) && this.Equals((UnicodeScalar)other));
