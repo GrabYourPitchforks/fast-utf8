@@ -47,10 +47,10 @@ namespace System.Buffers.Text
             //       xxxxxxxx = the range [upper bound - lower bound] (inclusive) of the next valid continuation byte,
             // and   w is set if there was an error.
 
-            // We only care about zzzzzzzz for the purpose of determining whether we're
-            // expecting to read the start of a sequence or a continuation code unit.
+            // If the error bit (w) is set or there are no more continuation bytes to read (zzzzzzzz = 0),
+            // then read the first byte of a new sequence.
 
-            if ((oldState & 0xFF0000U) == 0)
+            if ((int)oldState < 0x10000)
             {
                 // If this code unit is [ 00..7F ], then it's an ASCII character,
                 // which is a valid single-unit sequence, so we're done.
