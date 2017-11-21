@@ -202,7 +202,9 @@ namespace System.Buffers.Text
                 {
                     if (Utf8DWordSecondByteIsAscii(thisDWord))
                     {
-                        // Optimization: compute the base offset now to avoid multiple 'LEA' instructions later.
+                        // Optimization: compute the base offset now so that we can get a single LEA instruction
+                        // here, saving multiple LEA instructions for each individual byte-to-char expansion.
+
                         ref char tempOutputBuffer = ref Unsafe.Add(ref outputBuffer, outputBufferCurrentOffset);
 
                         if (Utf8DWordThirdByteIsAscii(thisDWord))
@@ -232,6 +234,7 @@ namespace System.Buffers.Text
                         }
                         else
                         {
+                            // Want to copy two characters to output buffer
                             if (outputBufferRemainingChars < 2) { goto ProcessRemainingBytesSlow; }
 
                             if (BitConverter.IsLittleEndian)
@@ -255,6 +258,7 @@ namespace System.Buffers.Text
                     }
                     else
                     {
+                        // Want to copy one character to output buffer
                         if (outputBufferRemainingChars == 0) { goto OutputBufferTooSmall; }
 
                         if (BitConverter.IsLittleEndian)
