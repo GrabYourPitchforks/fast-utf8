@@ -6,51 +6,6 @@ namespace System.Buffers.Text
 {
     internal static partial class Utf8Util
     {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint CountNumberOfLeadingAsciiBytesUpToThree(uint value)
-        {
-            // TODO: BMI & TZCNT support as optimization
-
-            // The 'allBytesUpToNowAreAscii' DWORD uses bit twiddling to hold a 1 or a 0 depending
-            // on whether all processed bytes were ASCII. Then we accumulate all of the
-            // results to calculate how many ASCII bytes we can strip off at once.
-
-            value = ~value;
-
-            if (BitConverter.IsLittleEndian)
-            {
-                // Read first byte
-                uint allBytesUpToNowAreAscii = (value >>= 7) & 1;
-                uint numAsciiBytes = allBytesUpToNowAreAscii;
-
-                // Read second byte
-                allBytesUpToNowAreAscii &= (value >>= 8);
-                numAsciiBytes += allBytesUpToNowAreAscii;
-
-                // Read third byte
-                allBytesUpToNowAreAscii &= (value >>= 8);
-                numAsciiBytes += allBytesUpToNowAreAscii;
-
-                return numAsciiBytes;
-            }
-            else
-            {
-                // Read first byte
-                uint allBytesUpToNowAreAscii = (value = ROL32(value, 1)) & 1;
-                uint numAsciiBytes = allBytesUpToNowAreAscii;
-
-                // Read second byte
-                allBytesUpToNowAreAscii &= (value = ROL32(value, 8));
-                numAsciiBytes += allBytesUpToNowAreAscii;
-
-                // Read third byte
-                allBytesUpToNowAreAscii &= (value = ROL32(value, 8));
-                numAsciiBytes += allBytesUpToNowAreAscii;
-
-                return numAsciiBytes;
-            }
-        }
-        
         // Assuming 'buffer' points to the start of an invalid sequence, returns the length (in bytes)
         // of the invalid sequence.
         [MethodImpl(MethodImplOptions.NoInlining)]
