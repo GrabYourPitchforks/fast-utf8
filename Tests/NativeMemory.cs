@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Runtime.InteropServices;
 
 namespace Tests
 {
@@ -130,7 +131,7 @@ namespace Tests
             bufferSpan = bufferSpan.Slice(checked(bufferSpan.Length - 2 * cch));
 
             new Random().NextBytes(bufferSpan); // fill with random data, doesn't need to be cryptographically secure
-            return bufferSpan.NonPortableCast<byte, char>();
+            return MemoryMarshal.Cast<byte, char>(bufferSpan);
         }
     }
 }

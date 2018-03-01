@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace System.Buffers.Text
 {
@@ -60,7 +61,7 @@ namespace System.Buffers.Text
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int ConvertUtf8ToUtf16(ReadOnlySpan<byte> utf8, Span<char> utf16)
         {
-            return (ConvertUtf8ToUtf16Core(ref utf8.DangerousGetPinnableReference(), utf8.Length, ref utf16.DangerousGetPinnableReference(), utf16.Length, out _, out int numCharsWritten))
+            return (ConvertUtf8ToUtf16Core(ref MemoryMarshal.GetReference(utf8), utf8.Length, ref MemoryMarshal.GetReference(utf16), utf16.Length, out _, out int numCharsWritten))
                 ? numCharsWritten
                 : throw new ArgumentException(
                     message: "Invalid data.",

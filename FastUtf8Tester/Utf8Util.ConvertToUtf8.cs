@@ -2,6 +2,7 @@
 using System.Buffers.Text;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace System.Buffers.Text
 {
@@ -44,7 +45,7 @@ namespace System.Buffers.Text
             while (true)
             {
                 totalInvalidSequenceCount++;
-                int numInvalidBytesAtStartOfSequence = GetInvalidByteCount(ref sequenceWithKnownInvalidStart.DangerousGetPinnableReference(), sequenceWithKnownInvalidStart.Length);
+                int numInvalidBytesAtStartOfSequence = GetInvalidByteCount(ref MemoryMarshal.GetReference(sequenceWithKnownInvalidStart), sequenceWithKnownInvalidStart.Length);
                 totalValidByteCount -= numInvalidBytesAtStartOfSequence;
                 Debug.Assert(numInvalidBytesAtStartOfSequence > 0); // We should always point to a span which is known to begin with an invalid sequence
 
@@ -81,7 +82,7 @@ namespace System.Buffers.Text
                 retValRemainder = retValRemainder.Slice(3);
 
                 // Skip over invalid bytes at beginning of input sequence.
-                input = input.Slice(GetInvalidByteCount(ref input.DangerousGetPinnableReference(), input.Length));
+                input = input.Slice(GetInvalidByteCount(ref MemoryMarshal.GetReference(input), input.Length));
 
                 // Find the start of the next invalid byte, copying over all valid bytes from
                 // the input buffer to the output buffer.
