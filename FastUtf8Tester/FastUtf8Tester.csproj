@@ -6,7 +6,7 @@
     <RuntimeFrameworkVersion>2.1.0-preview2-26131-06</RuntimeFrameworkVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <HighEntropyVA>true</HighEntropyVA>
-    <LangVersion>7.1</LangVersion>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
