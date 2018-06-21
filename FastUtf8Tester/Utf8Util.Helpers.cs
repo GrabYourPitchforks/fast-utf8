@@ -197,8 +197,8 @@ namespace System.Buffers.Text
             //     return ((value & mask) == comparand);
             // }
 
-            return (BitConverter.IsLittleEndian && ((value & 0x00C0C0F0U) == 0x008080E0U))
-                   || (!BitConverter.IsLittleEndian && ((value & 0xF0C0C000U) == 0xE0808000U));
+            return (BitConverter.IsLittleEndian && (((value - 0x008080E0U) & 0x00C0C0F0U) == 0))
+                || (!BitConverter.IsLittleEndian && (((value - 0xE0808000U) & 0xF0C0C000U) == 0));
         }
 
         /// <summary>
