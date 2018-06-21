@@ -114,8 +114,8 @@ namespace System.Buffers.Text
             //     return ((value & mask) == comparand);
             // }
 
-            return (BitConverter.IsLittleEndian && ((value & 0xC0E0C0E0U) == 0x80C080C0U))
-                || (!BitConverter.IsLittleEndian && ((value & 0xE0C0E0C0U) == 0xC080C080U));
+            return (BitConverter.IsLittleEndian && (((value - 0x80C080C0U) & 0xC0E0C0E0U) == 0))
+                || (!BitConverter.IsLittleEndian && (((value - 0xC080C080U) & 0xE0C0E0C0U) == 0));
         }
 
         /// <summary>
@@ -228,8 +228,8 @@ namespace System.Buffers.Text
             //     return ((value & mask) == comparand);
             // }
 
-            return (BitConverter.IsLittleEndian && ((value & 0x0000C0E0U) == 0x000080C0U))
-                || (!BitConverter.IsLittleEndian && ((value & 0xE0C00000U) == 0xC0800000U));
+            return (BitConverter.IsLittleEndian && (((value - 0x000080C0U) & 0x000C0E0U) == 0))
+                || (!BitConverter.IsLittleEndian && (((value - 0xC0800000U) & 0xE0C00000U) == 0));
         }
 
         /// <summary>
@@ -283,8 +283,8 @@ namespace System.Buffers.Text
             //     return ((value & mask) == comparand);
             // }
 
-            return (BitConverter.IsLittleEndian && ((value & 0xC0E00000U) == 0x80C00000U))
-                  || (!BitConverter.IsLittleEndian && ((value & 0x0000E0C0U) == 0x0000C080U));
+            return (BitConverter.IsLittleEndian && (((value - 0x80C00000U) & 0xC0E00000U) == 0))
+                || (!BitConverter.IsLittleEndian && (((value - 0x0000C080U) & 0x0000E0C0U) == 0));
         }
 
         /// <summary>
