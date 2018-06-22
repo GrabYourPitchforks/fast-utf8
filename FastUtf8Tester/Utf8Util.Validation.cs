@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 //
 // This file contains workhorse methods for performing validation of UTF-8 byte sequences.
@@ -18,71 +20,139 @@ namespace System.Buffers.Text
         // consumed (ASCII) bytes. It's possible that the method exits early, perhaps because there is some non-ASCII byte
         // later in the sequence or because we're running out of input to search. The intent is that the caller *skips over*
         // the number of bytes returned by this method, then it continues data processing from the next byte.
-        [MethodImpl(MethodImplOptions.NoInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static unsafe IntPtr ConsumeAsciiBytesVectorized(ref byte buffer, int length)
         {
-            // Only allow vectorization if vectors are hardware-accelerated and we have enough
-            // data to allow a vectorized search.
-
-            if (!Vector.IsHardwareAccelerated || length < 3 * Vector<byte>.Count)
+            if (Avx2.IsSupported)
+            {
+                return ConsumeAsciiBytesVectorized_Avx2(ref buffer, length);
+            }
+            else if (Vector.IsHardwareAccelerated)
+            {
+                return ConsumeAsciiBytesVectorized_DefaultHardwareAccelerated(ref buffer, length);
+            }
+            else
             {
                 return IntPtr.Zero;
             }
+        }
 
-            // JITter will generate VMOVUPD instructions, which performs better when the memory to read
-            // is aligned. The GC may move the buffer around in memory, and while it will never cause
-            // moved data to be misaligned with respect to the natural word size, no such guarantee is
-            // made with respect to SIMD vector alignment. We'll pin the buffer so that we can enforce
-            // alignment manually.
+        private static unsafe IntPtr ConsumeAsciiBytesVectorized_Avx2(ref byte buffer, int length)
+        {
+            // This routine uses AVX2 instructions (specifically, VPMOVMSKB) to speed up the "is ASCII?" check.
+            // The VPMOVMSKB instruction will return a 32-bit bitmask where each set bit in the bitmask corresponds
+            // to the high bit of the element at the corresponding vector index. We compare against zero to detect
+            // that no high bits are set, hence the data is all-ASCII.
+            //
+            // On processors that support AVX2, unaligned reads have approximately the same performance as aligned
+            // reads, so no need to align the data.
 
-            fixed (byte* pbBuffer = &buffer)
+            Debug.Assert(Avx2.IsSupported);
+
+            IntPtr retVal = IntPtr.Zero;
+
+            // Only allow vectorization if we have enough input buffer to allow a vectorized search.
+
+            if (length >= 3 * Unsafe.SizeOf<Vector256<byte>>())
             {
-                // [Potentially unaligned] single SIMD read and comparison, quick check for non-ASCII data.
+                // Quick check for non-ASCII data.
 
-                Vector<byte> mask = new Vector<byte>((byte)0x80);
-                if ((Unsafe.ReadUnaligned<Vector<byte>>(pbBuffer) & mask) != Vector<byte>.Zero)
+                if (Avx2.MoveMask(Unsafe.ReadUnaligned<Vector256<byte>>(ref buffer)) == 0)
                 {
-                    return IntPtr.Zero;
-                }
+                    ref byte currentPos = ref Unsafe.Add(ref buffer, Unsafe.SizeOf<Vector256<byte>>());
+                    ref byte finalPosAtWhichCanReadTwoVectors = ref Unsafe.Add(ref buffer, length - 2 * Unsafe.SizeOf<Vector256<byte>>());
 
-                // Round 'pbBuffer' up to the *next* aligned address. If 'pbBuffer' was already aligned, this
-                // just bumps the address up to the next vector. The read above guaranteed that we read all
-                // data between 'pbBuffer' and 'pbAlignedBuffer' and checked it for non-ASCII bytes. It's
-                // possible we'll duplicate a little bit of work if 'pbBuffer' wasn't already aligned since
-                // its tail end may overlap with the immediate upcoming aligned read, but it's faster just to
-                // perform the extra work and not worry about checking for this condition.
+                    // Iterate and read two AVX2 vectors at a time. We can skip the first length check on the
+                    // first iteration of the loop since we already performed a length check at the very beginning of this
+                    // method.
 
-                // 'pbAlignedBuffer' will be somewhere between 1 and Vector<byte>.Count bytes ahead of 'pbBuffer',
-                // hence the check for a length of >= 3 * Vector<byte>.Count at the beginning of this method.
-
-                byte* pbAlignedBuffer;
-                if (IntPtr.Size >= 8)
-                {
-                    pbAlignedBuffer = (byte*)(((long)pbBuffer + Vector<byte>.Count) & ~((long)Vector<byte>.Count - 1));
-                }
-                else
-                {
-                    pbAlignedBuffer = (byte*)(((int)pbBuffer + Vector<byte>.Count) & ~((int)Vector<byte>.Count - 1));
-                }
-
-                // Now iterate and read two aligned SIMD vectors at a time. We can skip the first length check on the
-                // first iteration of the loop since we already performed a length check at the very beginning of this
-                // method.
-
-                byte* pbFinalPosAtWhichCanReadTwoVectors = &pbBuffer[length - 2 * Vector<byte>.Count];
-                Debug.Assert(pbAlignedBuffer <= pbFinalPosAtWhichCanReadTwoVectors);
-
-                do
-                {
-                    if (((Unsafe.Read<Vector<byte>>(pbAlignedBuffer) | Unsafe.Read<Vector<byte>>(pbAlignedBuffer + Vector<byte>.Count)) & mask) != Vector<byte>.Zero)
+                    do
                     {
-                        break; // non-ASCII data incoming
-                    }
-                } while ((pbAlignedBuffer += 2 * Vector<byte>.Count) <= pbFinalPosAtWhichCanReadTwoVectors);
+                        if (Avx2.MoveMask(
+                                Avx2.Or(
+                                    Unsafe.ReadUnaligned<Vector256<byte>>(ref currentPos),
+                                    Unsafe.ReadUnaligned<Vector256<byte>>(ref Unsafe.Add(ref currentPos, Unsafe.SizeOf<Vector256<byte>>())))) != 0)
+                        {
+                            break; // non-ASCII data incoming
+                        }
+                    } while (!Unsafe.IsAddressGreaterThan(ref currentPos = ref Unsafe.Add(ref currentPos, 2 * Unsafe.SizeOf<Vector256<byte>>()), ref finalPosAtWhichCanReadTwoVectors));
 
-                // We consumed all data up to 'pbAlignedBuffer' and know it to be non-ASCII.
-                return (IntPtr)(pbAlignedBuffer - pbBuffer);
+                    retVal = Unsafe.ByteOffset(ref buffer, ref currentPos);
+                }
             }
+
+            return retVal;
+        }
+
+        private static unsafe IntPtr ConsumeAsciiBytesVectorized_DefaultHardwareAccelerated(ref byte buffer, int length)
+        {
+            // This is a fallback path for runtimes / hardware which don't support AVX2.
+
+            Debug.Assert(Vector.IsHardwareAccelerated);
+
+            IntPtr retVal = IntPtr.Zero;
+
+            // Only allow vectorization if we have enough input buffer to allow a vectorized search.
+
+            if (length >= 3 * Unsafe.SizeOf<Vector256<byte>>())
+            {
+
+                // JITter will generate VMOVUPD instructions, which performs better when the memory to read
+                // is aligned. The GC may move the buffer around in memory, and while it will never cause
+                // moved data to be misaligned with respect to the natural word size, no such guarantee is
+                // made with respect to SIMD vector alignment. We'll pin the buffer so that we can enforce
+                // alignment manually.
+
+                fixed (byte* pbBuffer = &buffer)
+                {
+                    // [Potentially unaligned] single SIMD read and comparison, quick check for non-ASCII data.
+
+                    Vector<byte> mask = new Vector<byte>((byte)0x80);
+                    if ((Unsafe.ReadUnaligned<Vector<byte>>(pbBuffer) & mask) == Vector<byte>.Zero)
+                    {
+
+                        // Round 'pbBuffer' up to the *next* aligned address. If 'pbBuffer' was already aligned, this
+                        // just bumps the address up to the next vector. The read above guaranteed that we read all
+                        // data between 'pbBuffer' and 'pbAlignedBuffer' and checked it for non-ASCII bytes. It's
+                        // possible we'll duplicate a little bit of work if 'pbBuffer' wasn't already aligned since
+                        // its tail end may overlap with the immediate upcoming aligned read, but it's faster just to
+                        // perform the extra work and not worry about checking for this condition.
+
+                        // 'pbAlignedBuffer' will be somewhere between 1 and Vector<byte>.Count bytes ahead of 'pbBuffer',
+                        // hence the check for a length of >= 3 * Vector<byte>.Count at the beginning of this method.
+
+                        byte* pbAlignedBuffer;
+                        if (IntPtr.Size >= 8)
+                        {
+                            pbAlignedBuffer = (byte*)(((long)pbBuffer + Vector<byte>.Count) & ~((long)Vector<byte>.Count - 1));
+                        }
+                        else
+                        {
+                            pbAlignedBuffer = (byte*)(((int)pbBuffer + Vector<byte>.Count) & ~((int)Vector<byte>.Count - 1));
+                        }
+
+                        // Now iterate and read two aligned SIMD vectors at a time. We can skip the first length check on the
+                        // first iteration of the loop since we already performed a length check at the very beginning of this
+                        // method.
+
+                        byte* pbFinalPosAtWhichCanReadTwoVectors = &pbBuffer[length - 2 * Vector<byte>.Count];
+                        Debug.Assert(pbAlignedBuffer <= pbFinalPosAtWhichCanReadTwoVectors);
+
+                        do
+                        {
+                            if (((Unsafe.Read<Vector<byte>>(pbAlignedBuffer) | Unsafe.Read<Vector<byte>>(pbAlignedBuffer + Vector<byte>.Count)) & mask) != Vector<byte>.Zero)
+                            {
+                                break; // non-ASCII data incoming
+                            }
+                        } while ((pbAlignedBuffer += 2 * Vector<byte>.Count) <= pbFinalPosAtWhichCanReadTwoVectors);
+
+                        // We consumed all data up to 'pbAlignedBuffer' and know it to be non-ASCII.
+                        retVal = (IntPtr)(pbAlignedBuffer - pbBuffer);
+                    }
+                }
+            }
+
+            return retVal;
         }
 
         /// <summary>

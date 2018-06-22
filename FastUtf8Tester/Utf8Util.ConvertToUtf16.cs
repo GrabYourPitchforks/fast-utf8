@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 namespace System.Buffers.Text
 {
@@ -12,16 +14,50 @@ namespace System.Buffers.Text
         // consumed (ASCII) bytes. It's possible that the method exits early, perhaps because there is some non-ASCII byte
         // later in the sequence or because we're running out of input to search. The intent is that the caller *skips over*
         // the number of bytes returned by this method, then it continues data processing from the next byte.
-        [MethodImpl(MethodImplOptions.NoInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static IntPtr ConvertAsciiBytesVectorized(ref byte inputBuffer, int inputBufferLength, ref char outputBuffer, int outputBufferLength)
         {
-            // Only allow vectorization if vectors are hardware-accelerated and we have enough
-            // data to allow a vectorized conversion.
-
-            if (!Vector.IsHardwareAccelerated)
+            if (Avx2.IsSupported)
+            {
+                return ConvertAsciiBytesVectorized_Avx2(ref inputBuffer, inputBufferLength, ref outputBuffer, outputBufferLength);
+            }
+            else if (Vector.IsHardwareAccelerated)
+            {
+                return ConvertAsciiBytesVectorized_DefaultHardwareAccelerated(ref inputBuffer, inputBufferLength, ref outputBuffer, outputBufferLength);
+            }
+            else
             {
                 return IntPtr.Zero;
             }
+        }
+
+        private static IntPtr ConvertAsciiBytesVectorized_Avx2(ref byte inputBuffer, int inputBufferLength, ref char outputBuffer, int outputBufferLength)
+        {
+            // This routine uses AVX2 instructions (specifically, VPMOVSXBW and VPMOVMSKB) to widen bytes to chars
+            // and to perform an "is ASCII?" check. See comments in ConsumeAsciiBytesVectorized_Avx2.
+
+            Debug.Assert(Avx2.IsSupported);
+
+            IntPtr currentOffset = IntPtr.Zero;
+            IntPtr finalOffsetAtWhichCanConvert = (IntPtr)(Math.Min(inputBufferLength, outputBufferLength) - Unsafe.SizeOf<Vector128<byte>>());
+            for (; IntPtrIsLessThanOrEqualTo(currentOffset, finalOffsetAtWhichCanConvert); currentOffset += Unsafe.SizeOf<Vector128<byte>>())
+            {
+                var narrowVector = Unsafe.ReadUnaligned<Vector128<sbyte>>(ref Unsafe.Add(ref inputBuffer, currentOffset));
+                var wideVector = Avx.StaticCast<short, byte>(Avx2.ConvertToVector256Int16(narrowVector));
+                if (Avx2.MoveMask(wideVector) != 0)
+                {
+                    break; // non-ASCII data incoming
+                }
+
+                Unsafe.WriteUnaligned(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref outputBuffer, currentOffset)), wideVector);
+            }
+
+            return currentOffset;
+        }
+
+        private static IntPtr ConvertAsciiBytesVectorized_DefaultHardwareAccelerated(ref byte inputBuffer, int inputBufferLength, ref char outputBuffer, int outputBufferLength)
+        {
+            Debug.Assert(Vector.IsHardwareAccelerated);
 
             // We won't bother checking for alignment. The JITter will generate VMOVUPD instructions, which will work
             // regardless of whether the memory access is aligned. Vector memory accesses are faster when aligned,
