@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics.X86;
 
 namespace System.Buffers.Text
 {
@@ -465,38 +466,7 @@ namespace System.Buffers.Text
             return (BitConverter.IsLittleEndian && ((int)value >= 0))
                 || (!BitConverter.IsLittleEndian && ((value & 0x80U) == 0U));
         }
-
-        // Widens a QWORD which represents a buffer of 8 BYTEs into 8 WORDs and writes them
-        // to an output buffer with machine endianness.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void WritePackedQWordAsChars(ref char chars, ulong value)
-        {
-            // TODO: BMI support
-
-            if (BitConverter.IsLittleEndian)
-            {
-                chars = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 4) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 5) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 6) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 7) = (char)value;
-            }
-            else
-            {
-                Unsafe.Add(ref chars, 7) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 6) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 5) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 4) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
-                chars = (char)value;
-            }
-        }
-
+        
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static char ExtractCharFromFirstThreeByteSequence(uint value)
         {
@@ -583,21 +553,27 @@ namespace System.Buffers.Text
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WritePackedDWordAsChars(ref char chars, uint value)
         {
-            // TODO: BMI support
-
-            if (BitConverter.IsLittleEndian)
+            if (Bmi2.IsSupported)
             {
-                chars = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 3) = (char)value;
+                // BMI2 will work regardless of the processor's endianness.
+                Unsafe.WriteUnaligned(ref Unsafe.As<char, byte>(ref chars), Bmi2.ParallelBitDeposit(value, 0x00FF00FF00FF00FFUL));
             }
             else
             {
-                Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
-                Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
-                chars = (char)value;
+                if (BitConverter.IsLittleEndian)
+                {
+                    chars = (char)(byte)value; value >>= 8;
+                    Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
+                    Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
+                    Unsafe.Add(ref chars, 3) = (char)value;
+                }
+                else
+                {
+                    Unsafe.Add(ref chars, 3) = (char)(byte)value; value >>= 8;
+                    Unsafe.Add(ref chars, 2) = (char)(byte)value; value >>= 8;
+                    Unsafe.Add(ref chars, 1) = (char)(byte)value; value >>= 8;
+                    chars = (char)value;
+                }
             }
         }
 
