@@ -283,10 +283,8 @@ namespace System.Buffers.Text
         /// </returns>
         public static bool TryGetUtf16CharCount(ReadOnlySpan<byte> inputBuffer, out int charCount)
         {
-            if (Utf8Util.GetIndexOfFirstInvalidUtf8Sequence(inputBuffer, out int runeCount, out int surrogatePairCount) < 0)
+            if (Utf8Util.GetIndexOfFirstInvalidUtf8Sequence(inputBuffer, out charCount, out _) < 0)
             {
-                // can't overflow because UTF-16 code unit count is always <= UTF-8 code unit count for well-formed strings
-                charCount = runeCount + surrogatePairCount;
                 return true;
             }
             else

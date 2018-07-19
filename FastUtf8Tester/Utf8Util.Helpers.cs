@@ -380,8 +380,11 @@ namespace System.Buffers.Text
         /// before the reference is DWORD-aligned. Returns a number in the range 0 - 3, inclusive.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static unsafe int GetNumberOfBytesToNextDWordAlignment(ref byte @ref)
-            => (int)((uint)sizeof(uint) - ((uint)Unsafe.AsPointer(ref @ref) % sizeof(uint)));
+        private static unsafe nuint GetNumberOfBytesToNextDWordAlignment(ref byte @ref)
+        {
+            // return (-&ref) & 3;
+            return (nuint)Unsafe.ByteOffset(ref @ref, ref Unsafe.AsRef<byte>(null)) & 3;
+        }
 
         /// <summary>
         /// Returns <see langword="true"/> iff (<paramref name="a"/> &lt;= <paramref name="b"/>).
@@ -421,6 +424,15 @@ namespace System.Buffers.Text
         private static bool IsUtf8ContinuationByte(uint value)
         {
             return ((value & 0xC0U) == 0x80U);
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> iff the input byte is a UTF-8 continuation byte (10xxxxxx).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsUtf8ContinuationByte(in byte value)
+        {
+            return Unsafe.As<byte, sbyte>(ref Unsafe.AsRef(in value)) < -64;
         }
 
         /// <summary>

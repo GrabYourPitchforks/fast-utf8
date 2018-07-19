@@ -165,17 +165,40 @@ namespace System.Buffers.Text
         /// <paramref name="surrogatePairCount"/> to <paramref name="scalarCount"/>.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> input, out int scalarCount, out int surrogatePairCount)
-            => GetIndexOfFirstInvalidUtf8Sequence(ref MemoryMarshal.GetReference(input), input.Length, out scalarCount, out surrogatePairCount);
+        internal static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> input)
+        {
+            int indexOfFirstInvalidByte = (int)(nuint)Unsafe.ByteOffset(ref MemoryMarshal.GetReference(input), ref GetIndexOfFirstInvalidUtf8Sequence(ref MemoryMarshal.GetReference(input), input.Length, out _, out _));
+            return (indexOfFirstInvalidByte == input.Length) ? -1 : indexOfFirstInvalidByte;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> input, out int utf16CharCount, out int scalarCount)
+        {
+            int indexOfFirstInvalidByte = (int)(nuint)Unsafe.ByteOffset(ref MemoryMarshal.GetReference(input), ref GetIndexOfFirstInvalidUtf8Sequence(ref MemoryMarshal.GetReference(input), input.Length, out int utf16CharAdjustment, out int scalarAdjustment));
+            int tempUtf16CharCount = indexOfFirstInvalidByte + utf16CharAdjustment;
+            utf16CharCount = tempUtf16CharCount;
+            scalarCount = tempUtf16CharCount + scalarAdjustment;
+            return (indexOfFirstInvalidByte == input.Length) ? -1 : indexOfFirstInvalidByte;
+        }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int GetIndexOfFirstInvalidUtf8Sequence(ref byte inputBuffer, int inputLength, out int scalarCount, out int surrogatePairCount)
+        private static unsafe ref byte GetIndexOfFirstInvalidUtf8Sequence(ref byte inputBuffer, int inputLength, out int utf16CodeUnitCountAdjustment, out int scalarCountAdjustment)
         {
             // The fields below control where we read from the buffer.
 
-            IntPtr inputBufferCurrentOffset = IntPtr.Zero;
-            int tempScalarCount = inputLength;
-            int tempSurrogatePairCount = 0;
+            int tempUtf16CodeUnitCountAdjustment = 0;
+            int tempScalarCountAdjustment = 0;
+
+            if (inputLength < sizeof(uint))
+            {
+                goto ProcessInputOfLessThanDWordSize;
+            }
+
+            // The subtraction below is "safe" from the GC's perspective because if 'inputBuffer' references a managed object, it will always be
+            // an interior pointer, which means that we still have some wiggle room to back up a bit and still be within the range of the
+            // original object reference.
+
+            ref byte finalPosWhereCanReadDWordFromInputBuffer = ref Unsafe.Add(ref Unsafe.Add(ref inputBuffer, inputLength), -sizeof(uint));
 
             // If the sequence is long enough, try running vectorized "is this sequence ASCII?"
             // logic. We perform a small test of the first few bytes to make sure they're all
@@ -188,7 +211,7 @@ namespace System.Buffers.Text
                     // Test first 16 bytes and check for all-ASCII.
                     if ((inputLength >= 2 * sizeof(ulong) + 3 * Vector<byte>.Count) && QWordAllBytesAreAscii(ReadAndFoldTwoQWordsUnaligned(ref inputBuffer)))
                     {
-                        inputBufferCurrentOffset = ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(ulong)), inputLength - 2 * sizeof(ulong)) + 2 * sizeof(ulong);
+                        inputBuffer = ref Unsafe.AddByteOffset(ref inputBuffer, ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(ulong)), inputLength - 2 * sizeof(ulong)) + 2 * sizeof(ulong));
                     }
                 }
                 else
@@ -196,31 +219,28 @@ namespace System.Buffers.Text
                     // Test first 8 bytes and check for all-ASCII.
                     if ((inputLength >= 2 * sizeof(uint) + 3 * Vector<byte>.Count) && DWordAllBytesAreAscii(ReadAndFoldTwoDWordsUnaligned(ref inputBuffer)))
                     {
-                        inputBufferCurrentOffset = ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(uint)), inputLength - 2 * sizeof(uint)) + 2 * sizeof(uint);
+                        inputBuffer = ref Unsafe.AddByteOffset(ref inputBuffer, ConsumeAsciiBytesVectorized(ref Unsafe.Add(ref inputBuffer, 2 * sizeof(uint)), inputLength - 2 * sizeof(uint)) + 2 * sizeof(uint));
                     }
                 }
             }
 
-            int inputBufferRemainingBytes = inputLength - ConvertIntPtrToInt32WithoutOverflowCheck(inputBufferCurrentOffset);
-
             // Begin the main loop.
 
 #if DEBUG
-            long lastOffsetProcessed = -1; // used for invariant checking in debug builds
+            ref byte lastBufferPosProcessed = ref Unsafe.AsRef<byte>(null); // used for invariant checking in debug builds
 #endif
 
-            while (inputBufferRemainingBytes >= sizeof(uint))
+            while (!Unsafe.IsAddressLessThan(ref finalPosWhereCanReadDWordFromInputBuffer, ref inputBuffer))
             {
                 // Read 32 bits at a time. This is enough to hold any possible UTF8-encoded scalar.
 
-                Debug.Assert(inputLength - (int)inputBufferCurrentOffset >= sizeof(uint));
-                uint thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                uint thisDWord = Unsafe.ReadUnaligned<uint>(ref inputBuffer);
 
                 AfterReadDWord:
 
 #if DEBUG
-                Debug.Assert(lastOffsetProcessed < (long)inputBufferCurrentOffset, "Algorithm should've made forward progress since last read.");
-                lastOffsetProcessed = (long)inputBufferCurrentOffset;
+                Debug.Assert(Unsafe.IsAddressLessThan(ref lastBufferPosProcessed, ref inputBuffer), "Algorithm should've made forward progress since last read.");
+                lastBufferPosProcessed = ref inputBuffer;
 #endif
 
                 // First, check for the common case of all-ASCII bytes.
@@ -229,13 +249,13 @@ namespace System.Buffers.Text
                 {
                     // We read an all-ASCII sequence.
 
-                    inputBufferCurrentOffset += 4;
-                    inputBufferRemainingBytes -= 4;
+                    inputBuffer = ref Unsafe.Add(ref inputBuffer, sizeof(uint));
 
                     // If we saw a sequence of all ASCII, there's a good chance a significant amount of following data is also ASCII.
                     // Below is basically unrolled loops with poor man's vectorization.
 
-                    if (inputBufferRemainingBytes >= 5 * sizeof(uint))
+                    // Below check is "can I read at least five DWORDs from the input stream?"
+                    if ((int)(nuint)Unsafe.ByteOffset(ref inputBuffer, ref finalPosWhereCanReadDWordFromInputBuffer) >= 4 * sizeof(uint))
                     {
                         // The JIT produces better codegen for aligned reads than it does for
                         // unaligned reads, and we want the processor to operate at maximum
@@ -245,25 +265,21 @@ namespace System.Buffers.Text
                         // alignment.
 
                         {
-                            ref byte refToCurrentDWord = ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset);
-                            thisDWord = Unsafe.ReadUnaligned<uint>(ref refToCurrentDWord);
+                            thisDWord = Unsafe.ReadUnaligned<uint>(ref inputBuffer);
                             if (!DWordAllBytesAreAscii(thisDWord))
                             {
                                 goto AfterReadDWordSkipAllBytesAsciiCheck;
                             }
-
-                            int adjustment = GetNumberOfBytesToNextDWordAlignment(ref refToCurrentDWord);
-                            inputBufferCurrentOffset += adjustment;
-                            // will adjust 'bytes remaining' value after below loop
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, GetNumberOfBytesToNextDWordAlignment(ref inputBuffer));
                         }
 
                         // At this point, the input buffer offset points to an aligned DWORD.
                         // We also know that there's enough room to read at least four DWORDs from the stream.
 
-                        IntPtr inputBufferFinalOffsetAtWhichCanSafelyLoop = (IntPtr)(inputLength - 4 * sizeof(uint));
+                        ref byte inputBufferFinalRefAtWhichCanSafelyLoop = ref Unsafe.Add(ref finalPosWhereCanReadDWordFromInputBuffer, -3 * sizeof(uint));
                         do
                         {
-                            ref uint currentReadPosition = ref Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                            ref uint currentReadPosition = ref Unsafe.As<byte, uint>(ref inputBuffer);
 
                             if (!DWordAllBytesAreAscii(currentReadPosition | Unsafe.Add(ref currentReadPosition, 1)))
                             {
@@ -272,14 +288,13 @@ namespace System.Buffers.Text
 
                             if (!DWordAllBytesAreAscii(Unsafe.Add(ref currentReadPosition, 2) | Unsafe.Add(ref currentReadPosition, 3)))
                             {
-                                inputBufferCurrentOffset += 2 * sizeof(uint);
+                                inputBuffer = ref Unsafe.Add(ref inputBuffer, 2 * sizeof(uint));
                                 goto LoopTerminatedEarlyDueToNonAsciiData;
                             }
 
-                            inputBufferCurrentOffset += 4 * sizeof(uint);
-                        } while (IntPtrIsLessThanOrEqualTo(inputBufferCurrentOffset, inputBufferFinalOffsetAtWhichCanSafelyLoop));
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 4 * sizeof(uint));
+                        } while (!Unsafe.IsAddressLessThan(ref inputBufferFinalRefAtWhichCanSafelyLoop, ref inputBuffer));
 
-                        inputBufferRemainingBytes = inputLength - ConvertIntPtrToInt32WithoutOverflowCheck(inputBufferCurrentOffset);
                         continue; // need to perform a bounds check because we might be running out of data
 
                         LoopTerminatedEarlyDueToNonAsciiData:
@@ -288,14 +303,13 @@ namespace System.Buffers.Text
                         // We also know that one of them (or both of them) contains non-ASCII data somewhere.
                         // Let's perform a quick check here to bypass the logic at the beginning of the main loop.
 
-                        thisDWord = Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        thisDWord = Unsafe.As<byte, uint>(ref inputBuffer);
                         if (DWordAllBytesAreAscii(thisDWord))
                         {
-                            inputBufferCurrentOffset += 4;
-                            thisDWord = Unsafe.As<byte, uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, sizeof(uint));
+                            thisDWord = Unsafe.As<byte, uint>(ref inputBuffer);
                         }
 
-                        inputBufferRemainingBytes = inputLength - ConvertIntPtrToInt32WithoutOverflowCheck(inputBufferCurrentOffset);
                         goto AfterReadDWordSkipAllBytesAsciiCheck;
                     }
 
@@ -311,10 +325,9 @@ namespace System.Buffers.Text
 
                 {
                     uint numLeadingAsciiBytes = CountNumberOfLeadingAsciiBytesFrom24BitInteger(thisDWord);
-                    inputBufferCurrentOffset += (int)numLeadingAsciiBytes;
-                    inputBufferRemainingBytes -= (int)numLeadingAsciiBytes;
+                    inputBuffer = ref Unsafe.Add(ref inputBuffer, (int)numLeadingAsciiBytes);
 
-                    if (inputBufferRemainingBytes < sizeof(uint))
+                    if (Unsafe.IsAddressLessThan(ref finalPosWhereCanReadDWordFromInputBuffer, ref inputBuffer))
                     {
                         goto ProcessRemainingBytesSlow; // Input buffer doesn't contain enough data to read a DWORD
                     }
@@ -322,7 +335,7 @@ namespace System.Buffers.Text
                     {
                         // The input buffer at the current offset contains a non-ASCII byte.
                         // Read an entire DWORD and fall through to multi-byte consumption logic.
-                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        thisDWord = Unsafe.ReadUnaligned<uint>(ref inputBuffer);
                     }
                 }
 
@@ -359,16 +372,15 @@ namespace System.Buffers.Text
                         ConsumeTwoAdjacentKnownGoodTwoByteSequences:
 
                         // We have two runs of two bytes each.
-                        inputBufferCurrentOffset += 4;
-                        inputBufferRemainingBytes -= 4;
-                        tempScalarCount -= 2; // 4 bytes -> 2 scalars
+                        inputBuffer = ref Unsafe.Add(ref inputBuffer, 4);
+                        tempUtf16CodeUnitCountAdjustment -= 2; // 4 UTF-8 code units -> 2 UTF-16 code units (and 2 scalars)
 
-                        if (inputBufferRemainingBytes >= sizeof(uint))
+                        if (!Unsafe.IsAddressLessThan(ref finalPosWhereCanReadDWordFromInputBuffer, ref inputBuffer))
                         {
                             // Optimization: If we read a long run of two-byte sequences, the next sequence is probably
                             // also two bytes. Check for that first before going back to the beginning of the loop.
 
-                            thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                            thisDWord = Unsafe.ReadUnaligned<uint>(ref inputBuffer);
 
                             if (BitConverter.IsLittleEndian)
                             {
@@ -424,35 +436,31 @@ namespace System.Buffers.Text
                     // Unlikely that a 3-byte sequence would follow a 2-byte sequence, so perhaps remaining
                     // bytes are ASCII?
 
+                    tempUtf16CodeUnitCountAdjustment--; // 2-byte sequence + (some number of ASCII bytes) -> 1 UTF-16 code units (and 1 scalar) [+ trailing]
+
                     if (DWordThirdByteIsAscii(thisDWord))
                     {
                         if (DWordFourthByteIsAscii(thisDWord))
                         {
-                            inputBufferCurrentOffset += 4; // a 2-byte sequence + 2 ASCII bytes
-                            inputBufferRemainingBytes -= 4; // a 2-byte sequence + 2 ASCII bytes
-                            tempScalarCount--; // 2-byte sequence + 2 ASCII bytes -> 3 scalars
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 4);
                         }
                         else
                         {
-                            inputBufferCurrentOffset += 3; // a 2-byte sequence + 1 ASCII byte
-                            inputBufferRemainingBytes -= 3; // a 2-byte sequence + 1 ASCII byte
-                            tempScalarCount--; // 2-byte sequence + 1 ASCII bytes -> 2 scalars
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 3);
 
                             // A two-byte sequence followed by an ASCII byte followed by a non-ASCII byte.
                             // Read in the next DWORD and jump directly to the start of the multi-byte processing block.
 
-                            if (inputBufferRemainingBytes >= sizeof(uint))
+                            if (!Unsafe.IsAddressLessThan(ref finalPosWhereCanReadDWordFromInputBuffer, ref inputBuffer))
                             {
-                                thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                                thisDWord = Unsafe.ReadUnaligned<uint>(ref inputBuffer);
                                 goto BeforeProcessTwoByteSequence;
                             }
                         }
                     }
                     else
                     {
-                        inputBufferCurrentOffset += 2;
-                        inputBufferRemainingBytes -= 2;
-                        tempScalarCount--; // 2-byte sequence -> 1 scalar
+                        inputBuffer = ref Unsafe.Add(ref inputBuffer, 2);
                     }
 
                     continue;
@@ -500,18 +508,24 @@ namespace System.Buffers.Text
 
                     ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks:
 
-                    inputBufferCurrentOffset += 3;
-                    inputBufferRemainingBytes -= 3;
-                    tempScalarCount -= 2; // 3 bytes -> 1 scalar
+                    inputBuffer = ref Unsafe.Add(ref inputBuffer, 3);
+                    tempUtf16CodeUnitCountAdjustment -= 2; // 3 UTF-8 bytes -> 1 UTF-16 code unit (and 1 scalar)
 
                     // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
                     // in to the text. If this happens strip it off now before seeing if the next character
                     // consists of three code units.
 
-                    if (DWordFourthByteIsAscii(thisDWord))
+                    if (BitConverter.IsLittleEndian)
                     {
-                        inputBufferCurrentOffset += 1;
-                        inputBufferRemainingBytes--;
+                        // branchless add 1 iff fourth byte is ASCII
+                        inputBuffer = ref Unsafe.Add(ref inputBuffer, (nuint)(~thisDWord >> 31));
+                    }
+                    else
+                    {
+                        if (DWordFourthByteIsAscii(thisDWord))
+                        {
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 1);
+                        }
                     }
 
                     SuccessfullyProcessedThreeByteSequence:
@@ -520,14 +534,15 @@ namespace System.Buffers.Text
                     // that the character following this one is also CJK. We'll try to process several
                     // three-byte sequences at a time.
 
-                    if (IntPtr.Size >= 8 && BitConverter.IsLittleEndian && inputBufferRemainingBytes >= (sizeof(ulong) + 1))
+                    // The check below is really "can we read 9 bytes from the input buffer?" since 'finalPos...' is already offset
+                    if (IntPtr.Size >= 8 && BitConverter.IsLittleEndian && (nuint)Unsafe.ByteOffset(ref inputBuffer, ref finalPosWhereCanReadDWordFromInputBuffer) >= 5)
                     {
-                        ulong thisQWord = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        ulong thisQWord = Unsafe.ReadUnaligned<ulong>(ref inputBuffer);
 
                         // Is this three 3-byte sequences in a row?
                         // thisQWord = [ 10yyyyyy 1110zzzz | 10xxxxxx 10yyyyyy 1110zzzz | 10xxxxxx 10yyyyyy 1110zzzz ] [ 10xxxxxx ]
                         //               ---- CHAR 3  ----   --------- CHAR 2 ---------   --------- CHAR 1 ---------     -CHAR 3-
-                        if ((thisQWord & 0xC0F0C0C0F0C0C0F0UL) == 0x80E08080E08080E0UL && IsUtf8ContinuationByte(Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + sizeof(ulong))))
+                        if ((thisQWord & 0xC0F0C0C0F0C0C0F0UL) == 0x80E08080E08080E0UL && IsUtf8ContinuationByte(in Unsafe.Add(ref inputBuffer, 8)))
                         {
                             // Saw a proper bitmask for three incoming 3-byte sequences, perform the
                             // overlong and surrogate sequence checking now.
@@ -563,9 +578,9 @@ namespace System.Buffers.Text
                                 goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
                             }
 
-                            inputBufferCurrentOffset += 9;
-                            inputBufferRemainingBytes -= 9;
-                            tempScalarCount -= 6; // 9 bytes -> 3 scalars
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 9);
+                            tempUtf16CodeUnitCountAdjustment -= 6; // 9 UTF-8 bytes -> 3 UTF-16 code units (and 3 scalars)
+
                             goto SuccessfullyProcessedThreeByteSequence;
                         }
 
@@ -597,9 +612,8 @@ namespace System.Buffers.Text
                                 goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
                             }
 
-                            inputBufferCurrentOffset += 6;
-                            inputBufferRemainingBytes -= 6;
-                            tempScalarCount -= 4; // 6 bytes -> 2 scalars
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 6);
+                            tempUtf16CodeUnitCountAdjustment -= 4; // 6 UTF-8 bytes -> 2 UTF-16 code units (and 2 scalars)
 
                             // The next char in the sequence didn't have a 3-byte marker, so it's probably
                             // an ASCII character. Jump back to the beginning of loop processing.
@@ -619,9 +633,9 @@ namespace System.Buffers.Text
                         }
                     }
 
-                    if (inputBufferRemainingBytes >= sizeof(uint))
+                    if (!Unsafe.IsAddressLessThan(ref finalPosWhereCanReadDWordFromInputBuffer, ref inputBuffer))
                     {
-                        thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset));
+                        thisDWord = Unsafe.ReadUnaligned<uint>(ref inputBuffer);
 
                         // Optimization: A three-byte character could indicate CJK text, which makes it likely
                         // that the character following this one is also CJK. We'll check for a three-byte sequence
@@ -682,46 +696,60 @@ namespace System.Buffers.Text
 
                     // Validation complete.
 
-                    inputBufferCurrentOffset += 4;
-                    inputBufferRemainingBytes -= 4;
-                    tempScalarCount -= 3; // 4 bytes -> 1 scalar
-                    tempSurrogatePairCount++; // 4 bytes implies UTF16 surrogate pair
+                    inputBuffer = ref Unsafe.Add(ref inputBuffer, 4);
+                    tempUtf16CodeUnitCountAdjustment -= 2; // 4 UTF-8 bytes -> 2 UTF-16 code units
+                    tempScalarCountAdjustment--; // 2 UTF-16 code units -> 1 scalar
 
                     continue; // go back to beginning of loop for processing
                 }
             }
 
+            goto ProcessRemainingBytesSlow;
+
+#pragma warning disable 0162 // compiler complains about unreachable code, but we need it for the local declaration
+            nuint inputBufferRemainingBytes;
+#pragma warning restore 0162
+
+            ProcessInputOfLessThanDWordSize:
+
+            Debug.Assert(inputLength < 4);
+            inputBufferRemainingBytes = inputLength;
+            goto ProcessSmallBufferCommon;
+
             ProcessRemainingBytesSlow:
+
+            inputBufferRemainingBytes = (nuint)Unsafe.ByteOffset(ref inputBuffer, ref finalPosWhereCanReadDWordFromInputBuffer) + 4;
+
+            ProcessSmallBufferCommon:
 
             Debug.Assert(inputBufferRemainingBytes < 4);
             while (inputBufferRemainingBytes > 0)
             {
-                uint firstByte = Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset);
+                uint firstByte = inputBuffer;
 
                 if (firstByte < 0x80U)
                 {
                     // 1-byte (ASCII) case
-                    inputBufferCurrentOffset += 1;
-                    inputBufferRemainingBytes -= 1;
+                    inputBuffer = ref Unsafe.Add(ref inputBuffer, 1);
+                    inputBufferRemainingBytes--;
                     continue;
                 }
                 else if (inputBufferRemainingBytes >= 2)
                 {
-                    uint secondByte = Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 1);
+                    uint secondByte = Unsafe.Add(ref inputBuffer, 1);
                     if (firstByte < 0xE0U)
                     {
                         // 2-byte case
                         if (firstByte >= 0xC2U && IsUtf8ContinuationByte(secondByte))
                         {
-                            inputBufferCurrentOffset += 2;
-                            inputBufferRemainingBytes -= 2;
-                            tempScalarCount--; // 2 bytes -> 1 scalar
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 2);
+                            tempUtf16CodeUnitCountAdjustment--; // 2 UTF-8 bytes -> 1 UTF-16 code unit (and 1 scalar)
                             continue;
                         }
                     }
                     else if (inputBufferRemainingBytes >= 3)
                     {
-                        uint thirdByte = Unsafe.Add(ref inputBuffer, inputBufferCurrentOffset + 2);
+                        uint thirdByte = Unsafe.Add(ref inputBuffer, 2);
                         if (firstByte <= 0xF0U)
                         {
                             if (firstByte == 0xE0U)
@@ -739,9 +767,8 @@ namespace System.Buffers.Text
 
                             if (IsUtf8ContinuationByte(thirdByte))
                             {
-                                inputBufferCurrentOffset += 3;
-                                inputBufferRemainingBytes -= 3;
-                                tempScalarCount -= 2; // 3 bytes -> 1 scalar
+                                inputBuffer = ref Unsafe.Add(ref inputBuffer, 3);
+                                tempUtf16CodeUnitCountAdjustment -= 2; // 3 UTF-8 bytes -> 2 UTF-16 code units (and 2 scalars)
                                 continue;
                             }
                         }
@@ -755,17 +782,14 @@ namespace System.Buffers.Text
 
             // If we reached this point, we're out of data, and we saw no bad UTF8 sequence.
 
-            scalarCount = tempScalarCount;
-            surrogatePairCount = tempSurrogatePairCount;
-            return -1;
-
-            // Error handling logic.
-
             Error:
 
-            scalarCount = tempScalarCount - inputBufferRemainingBytes; // we assumed earlier each byte corresponded to a single scalar, perform fixup now to account for unread bytes
-            surrogatePairCount = tempSurrogatePairCount;
-            return ConvertIntPtrToInt32WithoutOverflowCheck(inputBufferCurrentOffset);
+            // Error handling logic.
+            // (Also used for normal termination.)
+
+            utf16CodeUnitCountAdjustment = tempUtf16CodeUnitCountAdjustment;
+            scalarCountAdjustment = tempScalarCountAdjustment;
+            return ref inputBuffer;
         }
     }
 }
