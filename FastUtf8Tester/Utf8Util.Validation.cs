@@ -167,14 +167,14 @@ namespace System.Buffers.Text
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> input)
         {
-            int indexOfFirstInvalidByte = (int)(nuint)Unsafe.ByteOffset(ref MemoryMarshal.GetReference(input), ref GetIndexOfFirstInvalidUtf8Sequence(ref MemoryMarshal.GetReference(input), input.Length, out _, out _));
+            int indexOfFirstInvalidByte = (int)(nuint)Unsafe.ByteOffset(ref MemoryMarshal.GetReference(input), ref GetRefToFirstInvalidUtf8Sequence(ref MemoryMarshal.GetReference(input), input.Length, out _, out _));
             return (indexOfFirstInvalidByte == input.Length) ? -1 : indexOfFirstInvalidByte;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int GetIndexOfFirstInvalidUtf8Sequence(ReadOnlySpan<byte> input, out int utf16CharCount, out int scalarCount)
         {
-            int indexOfFirstInvalidByte = (int)(nuint)Unsafe.ByteOffset(ref MemoryMarshal.GetReference(input), ref GetIndexOfFirstInvalidUtf8Sequence(ref MemoryMarshal.GetReference(input), input.Length, out int utf16CharAdjustment, out int scalarAdjustment));
+            int indexOfFirstInvalidByte = (int)(nuint)Unsafe.ByteOffset(ref MemoryMarshal.GetReference(input), ref GetRefToFirstInvalidUtf8Sequence(ref MemoryMarshal.GetReference(input), input.Length, out int utf16CharAdjustment, out int scalarAdjustment));
             int tempUtf16CharCount = indexOfFirstInvalidByte + utf16CharAdjustment;
             utf16CharCount = tempUtf16CharCount;
             scalarCount = tempUtf16CharCount + scalarAdjustment;
@@ -182,7 +182,7 @@ namespace System.Buffers.Text
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static unsafe ref byte GetIndexOfFirstInvalidUtf8Sequence(ref byte inputBuffer, int inputLength, out int utf16CodeUnitCountAdjustment, out int scalarCountAdjustment)
+        private static unsafe ref byte GetRefToFirstInvalidUtf8Sequence(ref byte inputBuffer, int inputLength, out int utf16CodeUnitCountAdjustment, out int scalarCountAdjustment)
         {
             // The fields below control where we read from the buffer.
 
