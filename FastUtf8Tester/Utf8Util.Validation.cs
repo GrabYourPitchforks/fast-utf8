@@ -508,25 +508,25 @@ namespace System.Buffers.Text
 
                     ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks:
 
-                    inputBuffer = ref Unsafe.Add(ref inputBuffer, 3);
-                    tempUtf16CodeUnitCountAdjustment -= 2; // 3 UTF-8 bytes -> 1 UTF-16 code unit (and 1 scalar)
-
                     // Occasionally one-off ASCII characters like spaces, periods, or newlines will make their way
                     // in to the text. If this happens strip it off now before seeing if the next character
                     // consists of three code units.
 
                     if (BitConverter.IsLittleEndian)
                     {
-                        // branchless add 1 iff fourth byte is ASCII
-                        inputBuffer = ref Unsafe.Add(ref inputBuffer, (nuint)(~thisDWord >> 31));
+                        // Branchless: consume a 3-byte UTF-8 sequence and optionally an extra ASCII byte hanging off the end
+                        inputBuffer = ref Unsafe.Add(ref inputBuffer, ((int)thisDWord >> 31) + 4);
                     }
                     else
                     {
+                        inputBuffer = ref Unsafe.Add(ref inputBuffer, 3); // consumed a 3-byte UTF-8 sequence
                         if (DWordFourthByteIsAscii(thisDWord))
                         {
-                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 1);
+                            inputBuffer = ref Unsafe.Add(ref inputBuffer, 1); // consumed an extra single ASCII byte
                         }
                     }
+
+                    tempUtf16CodeUnitCountAdjustment -= 2; // 3 (or 4) UTF-8 bytes -> 1 (or 2) UTF-16 code unit (and 1 [or 2] scalar)
 
                     SuccessfullyProcessedThreeByteSequence:
 
@@ -550,33 +550,26 @@ namespace System.Buffers.Text
                             // Check the first character.
                             // If the first character is overlong or a surrogate, fail immediately.
 
-                            uint comparand = (uint)thisQWord & 0x200FU;
-                            if ((comparand == 0UL) || (comparand == 0x200DU))
-                            {
-                                goto Error;
-                            }
+                            if (((uint)thisQWord & 0x200FU) == 0) { goto Error; }
+                            if ((((uint)thisQWord - 0x200DU) & 0x200FU) == 0) { goto Error; }
 
                             // Check the second character.
                             // If this character is overlong or a surrogate, process the first character (which we
                             // know to be good because the first check passed) before reporting an error.
 
-                            comparand = (uint)(thisQWord >> 24) & 0x200FU;
-                            if ((comparand == 0U) || (comparand == 0x200DU))
-                            {
-                                thisDWord = (uint)thisQWord;
-                                goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
-                            }
+                            thisDWord = (uint)thisQWord;
+
+                            thisQWord >>= 24;
+                            if (((uint)thisQWord & 0x200FU) == 0) { goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks; }
+                            if ((((uint)thisQWord - 0x200DU) & 0x200FU) == 0) { goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks; }
 
                             // Check the third character (we already checked that it's followed by a continuation byte).
                             // If this character is overlong or a surrogate, process the first character (which we
                             // know to be good because the first check passed) before reporting an error.
 
-                            comparand = (uint)(thisQWord >> 48) & 0x200FU;
-                            if ((comparand == 0U) || (comparand == 0x200DU))
-                            {
-                                thisDWord = (uint)thisQWord;
-                                goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
-                            }
+                            thisQWord >>= 24;
+                            if (((uint)thisQWord & 0x200FU) == 0) { goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks; }
+                            if ((((uint)thisQWord - 0x200DU) & 0x200FU) == 0) { goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks; }
 
                             inputBuffer = ref Unsafe.Add(ref inputBuffer, 9);
                             tempUtf16CodeUnitCountAdjustment -= 6; // 9 UTF-8 bytes -> 3 UTF-16 code units (and 3 scalars)
@@ -595,22 +588,18 @@ namespace System.Buffers.Text
                             // Check the first character.
                             // If the first character is overlong or a surrogate, fail immediately.
 
-                            uint comparand = (uint)thisQWord & 0x200FU;
-                            if ((comparand == 0UL) || (comparand == 0x200DU))
-                            {
-                                goto Error;
-                            }
+                            if (((uint)thisQWord & 0x200FU) == 0) { goto Error; }
+                            if ((((uint)thisQWord - 0x200DU) & 0x200FU) == 0) { goto Error; }
 
                             // Check the second character.
                             // If this character is overlong or a surrogate, process the first character (which we
                             // know to be good because the first check passed) before reporting an error.
 
-                            comparand = (uint)(thisQWord >> 24) & 0x200FU;
-                            if ((comparand == 0U) || (comparand == 0x200DU))
-                            {
-                                thisDWord = (uint)thisQWord;
-                                goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks;
-                            }
+                            thisDWord = (uint)thisQWord;
+
+                            thisQWord >>= 24;
+                            if (((uint)thisQWord & 0x200FU) == 0) { goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks; }
+                            if ((((uint)thisQWord - 0x200DU) & 0x200FU) == 0) { goto ProcessSingleThreeByteSequenceSkipOverlongAndSurrogateChecks; }
 
                             inputBuffer = ref Unsafe.Add(ref inputBuffer, 6);
                             tempUtf16CodeUnitCountAdjustment -= 4; // 6 UTF-8 bytes -> 2 UTF-16 code units (and 2 scalars)
