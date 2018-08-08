@@ -2,8 +2,9 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>netcoreapp2.1</TargetFramework>
-    <RuntimeFrameworkVersion>2.1.1</RuntimeFrameworkVersion>
+    <TargetFramework>netcoreapp3.0</TargetFramework>
+    <RuntimeFrameworkVersion>3.0.0-preview1-26808-05</RuntimeFrameworkVersion>
+    <NETCoreAppMaximumVersion>3.0</NETCoreAppMaximumVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <HighEntropyVA>true</HighEntropyVA>
     <LangVersion>latest</LangVersion>
@@ -12,7 +13,6 @@
 
   <ItemGroup>
     <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="4.5.1" />
-    <PackageReference Include="System.Runtime.Intrinsics.Experimental" Version="4.6.0-preview1-26622-01" />
   </ItemGroup>
 
   <ItemGroup>
