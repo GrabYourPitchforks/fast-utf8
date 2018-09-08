@@ -77,7 +77,9 @@ namespace FastUtf8Tester
                 stopwatch.Restart();
                 for (int j = 0; j < NUM_ITERS; j++)
                 {
-                    Encoding.UTF8.GetChars(asBytes, asChars);
+                    // Encoding.UTF8.GetChars(asBytes, asChars);
+                    // Encoding.UTF8.GetCharCount(asBytes);
+                    Encoding.UTF8.GetByteCount(lipsum);
                 }
                 Console.WriteLine($"Elapsed: {stopwatch.Elapsed}");
             }
@@ -108,7 +110,9 @@ namespace FastUtf8Tester
                 stopwatch.Restart();
                 for (int j = 0; j < NUM_ITERS; j++)
                 {
-                    Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
+                    // Utf8Util.ConvertUtf8ToUtf16(asBytes, asChars);
+                    // Utf8Util.GetIndexOfFirstInvalidUtf8Sequence(asBytes, out _, out _);
+                    Utf16Util.GetUtf8ByteCount(lipsum.AsSpan());
                 }
                 Console.WriteLine($"Elapsed: {stopwatch.Elapsed}");
             }

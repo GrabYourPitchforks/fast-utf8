@@ -18,7 +18,7 @@ namespace System.Buffers.Text
         public static int GetUtf8ByteCount(ReadOnlySpan<char> utf16Data) => GetUtf8ByteCount(ref MemoryMarshal.GetReference(utf16Data), utf16Data.Length);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int GetUtf8ByteCount(ref char data, nuint length) => GetUtf8ByteCount_VectorizedAscii(ref data, length);
+        private static int GetUtf8ByteCount(ref char data, nuint length) => GetUtf8ByteCount_Bmi(ref data, length);
 
         private static int GetUtf8ByteCount_VectorizedAscii(ref char data, nuint length)
         {
@@ -108,6 +108,169 @@ namespace System.Buffers.Text
             } while (!Unsafe.IsAddressGreaterThan(ref data, ref lastPositionWhereCanReadVector));
 
             return accum;
+        }
+
+        private static int GetUtf8ByteCount_BitMasks(ref char data, nuint length)
+        {
+            // Can we attempt vectorization?
+
+            if (length >= 8)
+            {
+                ulong COMPARISON_CONST = 0xFF80FF80FF80FF80ul;
+                ref char lastPositionWhereCanRead8Chars = ref Unsafe.Add(ref Unsafe.Add(ref data, length), -8);
+                do
+                {
+                    if (((Unsafe.ReadUnaligned<ulong>(ref Unsafe.As<char, byte>(ref data)) | Unsafe.ReadUnaligned<ulong>(ref Unsafe.As<char, byte>(ref Unsafe.Add(ref data, 4)))) & COMPARISON_CONST) != 0)
+                    {
+                        return -1;
+                    }
+                    data = ref Unsafe.Add(ref data, 8);
+                } while (!Unsafe.IsAddressGreaterThan(ref data, ref lastPositionWhereCanRead8Chars));
+            }
+
+            return data;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static OperationStatus ConvertUtf16ToUtf8(ReadOnlySpan<char> source, Span<byte> destination, out int charsConsumed, out int bytesWritten)
+        {
+            return ConvertUtf16ToUtf8(ref MemoryMarshal.GetReference(source), source.Length, ref MemoryMarshal.GetReference(destination), destination.Length, out charsConsumed, out bytesWritten);
+        }
+
+        private static OperationStatus ConvertUtf16ToUtf8(ref char source, int sourceLength, ref byte destination, int destinationLength, out int charsConsumed, out int bytesWritten)
+        {
+
+
+            if (sourceLength < 2)
+            {
+                goto SmallInput;
+            }
+
+            ref char finalPosWhereCanReadTwoCharsFromInput = ref Unsafe.Add(ref Unsafe.Add(ref source, sourceLength), -2);
+
+            // TODO: Vectorize me if possible
+
+            // Begin the main loop.
+
+#if DEBUG
+            ref char lastBufferPosProcessed = ref Unsafe.AsRef<char>(null); // used for invariant checking in debug builds
+#endif
+
+            while (!Unsafe.IsAddressLessThan(ref finalPosWhereCanReadTwoCharsFromInput, ref source))
+            {
+                // Read 32 bits at a time. This is enough to hold any possible UTF-16 encoded scalar.
+
+                uint thisDWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.As<char, byte>(ref source));
+
+                AfterReadDWord:
+
+#if DEBUG
+                Debug.Assert(Unsafe.IsAddressLessThan(ref lastBufferPosProcessed, ref source), "Algorithm should've made forward progress since last read.");
+                lastBufferPosProcessed = ref source;
+#endif
+
+                // First, check for the common case of all-ASCII input.
+
+                if (DWordAllCharsAreAscii(thisDWord))
+                {
+                    // We read an all-ASCII sequence.
+#error not implemented
+                }
+
+                // Next, try stripping off ASCII characters one at a time.
+                // We only handle a single ASCII character here since we handled the two-ASCII char case above.
+
+                if (DWordBeginsWithUtf16AsciiChar(thisDWord))
+                {
+                    if (destinationLength == 0)
+                    {
+                        goto DestinationTooSmall;
+                    }
+
+                    if (BitConverter.IsLittleEndian)
+                    {
+                        destination = (byte)thisDWord;
+                        thisDWord >>= 16;
+                    }
+                    else
+                    {
+                        destination = (byte)(thisDWord >> 16);
+                        thisDWord <<= 16;
+                    }
+
+                    source = ref Unsafe.Add(ref source, 1);
+
+                    destination = ref Unsafe.Add(ref destination, 1);
+                    destinationLength--;
+                }
+
+                // Check the [ U+0080..U+07FF ] case: 2 UTF-8 bytes.
+
+                if (!DWordBeginsWithUtf16U0800OrHigherChar(thisDWord))
+                {
+                    if (BitConverter.IsLittleEndian)
+                    {
+                        if (destinationLength < 2)
+                        {
+                            goto DestinationTooSmall;
+                        }
+
+                        // We know the low WORD of thisDWord is [ 00000yyy yyxxxxxx ], so there's room
+                        // in the high bits of the low WORD to store the "110" UTF-8 2-byte sequence marker.
+                        //
+                        // UTF-8 sequence is [ 110yyyyy 10xxxxxx ].
+
+                        destination = (byte)((thisDWord + (0b110 << 11)) >> 6);
+                        thisDWord = (thisDWord & 0xFFFF003FU) | 0x80; // continuation byte marker
+                        Unsafe.Add(ref destination, 1) = (byte)thisDWord;
+                        thisDWord >>= 16;
+
+                        // Is this character followed by an ASCII character? We can't perform this
+                        // optimization if we see a null character in the second position, as that
+                        // character may have been introduced by the ASCII stripping step earlier
+                        // in the processing loop. If we see a null character (which should be very
+                        // uncommon), just go back to the start of the loop.
+
+                        if (Utf8Util.IsInRangeInclusive(thisDWord, 0x00010000U, 0x007FFFFFU))
+                        {
+                            // ASCII character found!
+
+                            if (destinationLength >= 3)
+                            {
+                                Unsafe.Add(ref destination, 2) = (byte)(thisDWord >> 16);
+
+                                source = ref Unsafe.Add(ref source, 2); // consumed 2 source characters
+
+                                destination = ref Unsafe.Add(ref destination, 3); // wrote 3 destination bytes
+                                destinationLength -= 3;
+
+                                continue; // continue with main loop
+                            }
+                            else
+                            {
+                                source = ref Unsafe.Add(ref source, 1); // consumed 1 source character
+
+                                destination = ref Unsafe.Add(ref destination, 2); // wrote 2 destination bytes
+                                destinationLength -= 2;
+
+                                goto DestinationTooSmall;
+                            }
+                        }
+                    }
+                    else
+                    {
+#error not implemented
+                    }
+                }
+
+            }
+
+            SmallInput:
+
+            DestinationTooSmall:
+
+                #error not implemented
+
         }
     }
 }
